@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**ZhiSaoTong (智扫通)** — a FastAPI + SSE streaming intelligent customer service agent for robot vacuum cleaners. Uses LangChain 1.x ReAct Agent + RAG (BM25 + Dense + RRF + Cross-Encoder Reranker) over a private knowledge base to handle pre-sales Q&A, environment-aware recommendations, and personalized usage report generation. Streamlit retained as legacy UI.
+**ZhiSaoTong (智扫通)** — a FastAPI + SSE streaming intelligent customer service agent for robot vacuum cleaners. Uses LangChain 1.x ReAct Agent + RAG (BM25 + Dense + RRF + Cross-Encoder Reranker) over a private knowledge base to handle pre-sales Q&A, environment-aware recommendations, and personalized usage report generation. Streamlit (`app.py`) retained as legacy UI.
 
 ## Commands
 
@@ -15,10 +15,10 @@ pip install -r requirements.txt
 # Initialize/re-index the Chroma vector store from data/ (first run, or when documents change)
 python -m rag.vector_store
 
-# Start the FastAPI server (primary — SSE streaming API)
+# Start the FastAPI server (primary — SSE streaming API + chat UI at http://localhost:8000)
 uvicorn api.main:app --reload --port 8000
 
-# Start the Streamlit web app (legacy UI)
+# Start the Streamlit web app (legacy UI at http://localhost:8501)
 streamlit run app.py
 
 # Test hybrid search independently
@@ -28,7 +28,10 @@ python -m rag.hybrid_retriever
 python -m eval.evaluate
 
 # Re-index knowledge base via API
-curl -X POST http://localhost:8000/knowledge/reindex
+curl -X POST http://localhost:8000/api/v1/knowledge/reindex
+
+# Redis (WSL2 on Windows) — start if not running
+wsl -u root bash -c "redis-server --daemonize yes"
 ```
 
 Requires `DASHSCOPE_API_KEY` (Alibaba Cloud DashScope — LLM + Embeddings + Reranker).  
@@ -39,55 +42,92 @@ FastAPI docs at `http://localhost:8000/docs`.
 ## Architecture (v2.0)
 
 ```
-FastAPI (api/main.py + api/routers/) — SSE streaming + REST endpoints
-  ├── api/routers/chat.py — POST /api/v1/chat/stream (SSE)
-  ├── api/routers/knowledge.py — GET /knowledge/stats, POST /knowledge/reindex
-  ├── api/schemas/chat.py — Pydantic models
-  └── api/static/index.html — vanilla JS chat UI with SSE consumption, markdown, tool call cards
-  └── agent/react_agent.py (ReactAgent — wraps langchain create_agent)
-       ├── agent/tools/agent_tools.py (8 @tool functions)
-       ├── agent/tools/middleware.py (4 middleware hooks)
-       ├── rag/hybrid_retriever.py (BM25 + Dense Vector + RRF → Cross-Encoder Reranker)
-       ├── memory/ (Redis short-term + Chroma long-term memory)
-       └── model/factory.py (ChatTongyi + DashScopeEmbeddings via factory pattern)
+FastAPI (api/main.py) — lifespan-managed Agent + Memory singletons
+  ├── api/routers/chat.py      — POST /api/v1/chat/stream (SSE), session CRUD
+  ├── api/routers/knowledge.py — GET /stats, POST /reindex
+  ├── api/schemas/chat.py      — Pydantic request/response models
+  └── api/static/index.html    — vanilla JS chat UI (SSE EventSource, localStorage sessions, marked.js)
+  └── agent/react_agent.py     — ReactAgent wrapping langchain create_agent
+       ├── agent/tools/agent_tools.py   — 8 @tool functions
+       ├── agent/tools/middleware.py    — 5 middleware hooks
+       ├── rag/                         — hybrid retrieval pipeline
+       ├── memory/                      — short-term (Redis) + long-term (Chroma) memory
+       ├── model/factory.py             — ChatTongyi + DashScopeEmbeddings (factory pattern)
+       └── utils/                       — config, prompts, logging, paths, token_counter
   └── eval/
        ├── test_queries.json (30 annotated queries × 4 categories)
-       ├── evaluate.py (4-way retriever comparison)
-       └── eval_result.json (latest run output)
+       ├── evaluate.py        — 4-way retriever comparison
+       └── eval_result.json   — latest run output
 ```
 
-**The 8 tools:** `rag_summarize`, `get_weather`, `get_user_location`, `get_user_id`, `get_current_month`, `fetch_external_data`, `fill_context_for_report`, `memory_recall`.
+### SSE streaming pipeline (critical path)
 
-**The 5 middleware** (LangChain 1.x decorator-based middleware API):
-- `monitor_tool` (`@wrap_tool_call`) — logs tool calls/errors; when `fill_context_for_report` is called, injects `context["report"]=True`
-- `log_before_model` (`@before_model`) — logs message history before each LLM call
-- `report_prompt_switch` (`@dynamic_prompt`) — detects `context["report"]==True` and switches from `main_prompt.txt` to `report_prompt.txt`
-- `memory_inject` (`@before_model`) — injects short-term + long-term memory context into the system prompt before each model call (with dedup guard to prevent repeated injection during ReAct loops)
-- `token_guard` (`@before_model`) — [NEW] estimates total token count via tiktoken (with heuristic fallback), trims oldest history messages when over budget, and triggers LLM summarization of trimmed messages to preserve context continuity
+```
+User sends query → event_generator() → agent.execute_stream_async()
+  → LangGraph astream(stream_mode="messages")
+    → AIMessageChunk(content="字")  → format_sse({"type":"content","content":"字"})
+    → AIMessageChunk(tool_calls=[]) → format_sse({"type":"tool_call",...})
+    → ToolMessage                  → format_sse({"type":"tool_result",...})
+  → StreamingResponse(media_type="text/event-stream")
+  → Browser EventSource accumulates tokens → marked.parse() renders markdown
+```
 
-**Hybrid RAG pipeline** (`rag/`):
-Documents → MD5 dedup → Chinese-aware chunking → Chroma DB.
-Retrieval: BM25 keyword search (jieba tokenization) + Dense Vector (Chroma) → RRF fusion → top-N candidates → Cross-Encoder Reranker (qwen3-rerank) → final top-k → LLM summarization. Configurable via `config/chroma.yml` `hybrid_search` section.
+**Two things required for true token-by-token streaming:**
+1. `ChatTongyi(streaming=True)` in `model/factory.py` — without this, LangChain falls back to `ainvoke()` producing a single chunk
+2. `stream_mode="messages"` on `agent.astream()` — `"values"` yields entire state per graph node; `"messages"` yields `(AIMessageChunk, metadata)` tuples
 
-**Memory system** (`memory/`):
-- `ShortTermMemory` — Redis sliding window (recent N rounds per session)
-- `LongTermMemory` — conversation summaries stored in Chroma, semantically retrieved for context
-- `MemoryManager` — unified entry point; gracefully degrades when Redis is unavailable
-- **Token window management** — `utils/token_counter.py` provides tiktoken-based estimation + heuristic fallback; `token_guard` middleware enforces budget via history trimming + LLM summarization. Config in `config/memory.yml` `token_window` section.
+### The 8 tools
 
-**Runtime context flow for report generation:**
+`rag_summarize`, `get_weather`, `get_user_location`, `get_user_id`, `get_current_month`, `fetch_external_data`, `fill_context_for_report`, `memory_recall`.
+
+Real API: `get_weather` + `get_user_location` use Amap APIs. Mock: `get_user_id` + `get_current_month` return random choices. `fetch_external_data` reads `data/external/records.csv`. `fill_context_for_report` is a trigger tool (returns nothing, signals middleware to switch to report mode).
+
+### The 5 middleware (LangChain 1.x decorator-based, ordered by execution)
+
+| # | Middleware | Decorator | Purpose |
+|---|-----------|-----------|---------|
+| 1 | `monitor_tool` | `@wrap_tool_call` | Log tool calls/errors; sets `context["report"]=True` when `fill_context_for_report` is called |
+| 2 | `log_before_model` | `@before_model` | Log message count + last message before each LLM call |
+| 3 | `report_prompt_switch` | `@dynamic_prompt` | Detects `context["report"]==True` → switches system prompt from `main_prompt.txt` to `report_prompt.txt` |
+| 4 | `memory_inject` | `@before_model` | Fetches short-term (Redis) + long-term (Chroma) memory, injects into system prompt. Uses `<!--memory_injected-->` guard to prevent repeated injection during ReAct loops |
+| 5 | `token_guard` | `@before_model` | Estimates tokens via tiktoken (heuristic fallback), trims oldest history when over budget, triggers LLM summarization of trimmed messages. Uses `<!--token_guarded-->` guard |
+
+**Middleware ordering matters:** `memory_inject` must run before `token_guard` — injection increases token count, so the guard must see the final system prompt.
+
+### Report generation context flow
+
 1. User requests a report → Agent calls `fill_context_for_report`
-2. `monitor_tool` sets `context["report"] = True`
-3. Next model call, `report_prompt_switch` returns `report_prompt.txt` as the system prompt
-4. Agent operates in report-generation mode from then on
+2. `monitor_tool` intercepts → sets `runtime.context["report"] = True`
+3. Next model call → `report_prompt_switch` returns `report_prompt.txt`
+4. Agent operates in report-generation mode for the rest of the conversation
+
+### Hybrid RAG pipeline (`rag/`)
+
+Documents → MD5 dedup (4KB streaming chunks) → Chinese-aware chunking (RecursiveCharacterTextSplitter) → Chroma DB.
+Retrieval: BM25 (jieba tokenization) + Dense Vector (Chroma) → RRF fusion (k=60) → top-N candidates → Cross-Encoder Reranker (qwen3-rerank) → final top-k → LLM summarization.
+Config in `config/chroma.yml` → `hybrid_search` section.
+
+### Memory system (`memory/`)
+
+- **ShortTermMemory** — Redis List per session (`session:{id}:messages`), sliding window (LPUSH + LTRIM). Gracefully degrades to empty when Redis unavailable.
+- **LongTermMemory** — conversation summaries stored in Chroma (`long_term_memory` collection), semantically retrieved for context. Simple rule-based summarization; designed for future LLM-based summarization.
+- **MemoryManager** — singleton (`get_instance()`), initializes both stores, provides `add_interaction()` / `get_context()` / `clear()`. Auto-archives old short-term messages to long-term when threshold exceeded.
+- **Token window management** — `utils/token_counter.py` provides tiktoken-based estimation (cl100k_base, Chinese ~1.5 token/char) with heuristic fallback (±30%). `token_guard` middleware enforces budget via history trimming + LLM summarization. Config in `config/memory.yml` → `token_window`.
+
+### Session management
+
+Two-layer architecture:
+- **Backend**: REST API (`GET/DELETE /api/v1/chat/sessions`, `GET /sessions/{id}/messages`) scans Redis keys via SCAN (non-blocking), returns session metadata + message history
+- **Frontend**: `localStorage` stores session metadata (id, preview, lastActive). Survives page refresh. `initApp()` restores last active session. Session switching fetches history from backend API.
 
 ## Key Patterns
 
-- **`__init__.py` used in new packages** — `api/`, `memory/`, `eval/` use standard Python package structure with `__init__.py`. Older modules (`agent/`, `rag/`, `model/`, `utils/`) omit them; imports work because all code runs from the project root.
-- **Absolute path resolution** — `utils/path_tool.py` derives the project root from its own location (`__file__` → up 2 levels). All file I/O should use `get_abs_path()`.
-- **YAML-driven config** — `utils/config_handler.py` loads 5 config files at module level (`rag_conf`, `chroma_conf`, `prompts_conf`, `agent_conf`, `memory_conf`). Model names, chunk settings, prompt paths, data paths, and memory parameters all live in `config/`.
-- **Model factory** — `model/factory.py`: `ChatModelFactory` and `EmbeddingsFactory` extend `BaseModelFactory`. Module-level singletons `chat_model` and `embed_model` are the canonical instances.
-- **Real API tools** — `get_weather` and `get_user_location` use Alibaba Cloud Amap APIs (IP geolocation + weather). `get_user_id` and `get_current_month` return mock data. `fetch_external_data` reads `data/external/records.csv`. These are extensible to real API/SQL calls.
+- **`__init__.py` usage** — `api/`, `memory/`, `eval/` use standard package structure. `agent/`, `rag/`, `model/`, `utils/` omit them; imports work because all code runs from the project root.
+- **Absolute path resolution** — `utils/path_tool.py` derives project root from its own location (`__file__` → up 2 levels). Always use `get_abs_path()` for file I/O.
+- **YAML-driven config** — `utils/config_handler.py` loads 5 config files as module-level singletons (`rag_conf`, `chroma_conf`, `prompts_conf`, `agent_conf`, `memory_conf`). Model names, chunk settings, prompt paths, data paths, and memory parameters all live in `config/`.
+- **Model factory singletons** — `model/factory.py`: `ChatModelFactory` and `EmbeddingsFactory` produce module-level `chat_model` and `embed_model` via factory pattern. `chat_model` has `streaming=True` (critical for SSE).
+- **Middleware guard markers** — `@before_model` fires on EVERY LLM call within a single ReAct loop. Use sentinel strings (`<!--memory_injected-->`, `<!--token_guarded-->`) in system prompt content to prevent repeated operations.
 - **Logging** — `utils/logger_handler.py` sets up daily log files in `logs/agent_YYYYMMDD.log` (DEBUG to file, INFO to console) with duplicate-handler guard.
-- **MD5-based dedup** — `rag/vector_store.py` computes MD5 per file (4KB streaming chunks), compares against `md5.text`, only embeds new/changed files.
-- **RAG evaluation** — `eval/evaluate.py` runs 4-way retriever comparison (Dense / BM25 / Hybrid RRF / Hybrid + Rerank) across 30 annotated queries, measuring Hit Rate@k (loose + strict), MRR, and keyword coverage. RAGAS generation quality evaluation (Faithfulness / Context Relevance / Answer Relevance) also included but depends on `ragas` package.
+- **MD5-based dedup** — `rag/vector_store.py` computes MD5 per file, compares against `md5.text`, only embeds new/changed files.
+- **Streaming chunk routing** — `execute_stream_async` yields both plain text tokens and JSON tool events. The SSE handler in `chat.py` routes by prefix: strings starting with `{"type":` are parsed as JSON tool events; everything else is a text token.
+- **Graceful degradation** — Redis failure → short-term memory returns empty. Reranker API failure → falls back to RRF ordering. Memory save failure → doesn't affect SSE response.
