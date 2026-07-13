@@ -76,6 +76,66 @@
         .sidebar .info { margin-top: auto; font-size: 12px; color: #64748b; }
         .sidebar .info .dot { display: inline-block; width: 8px; height: 8px; background: #22c55e; border-radius: 50%; margin-right: 6px; }
 
+        /* Session list */
+        .session-list {
+            margin-top: 12px;
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .session-item {
+            padding: 10px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background .15s;
+            position: relative;
+            border-left: 3px solid transparent;
+        }
+        .session-item:hover { background: #334155; }
+        .session-item.active {
+            background: #334155;
+            border-left-color: var(--primary);
+        }
+        .session-item .session-time {
+            font-size: 11px;
+            color: #64748b;
+            margin-bottom: 3px;
+        }
+        .session-item .session-preview {
+            font-size: 13px;
+            color: #cbd5e1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding-right: 24px;
+        }
+        .session-item .session-delete {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: #64748b;
+            cursor: pointer;
+            font-size: 14px;
+            opacity: 0;
+            transition: opacity .15s, color .15s;
+            padding: 2px 4px;
+        }
+        .session-item:hover .session-delete { opacity: 1; }
+        .session-item .session-delete:hover { color: #ef4444; }
+        .no-sessions {
+            font-size: 13px;
+            color: #64748b;
+            padding: 8px 0;
+            text-align: center;
+        }
+        .session-list::-webkit-scrollbar { width: 4px; }
+        .session-list::-webkit-scrollbar-thumb { background: #475569; border-radius: 2px; }
+
         /* Main */
         .main {
             flex: 1;
@@ -312,10 +372,12 @@
         <div class="logo">智<span>扫</span>通</div>
         <div class="subtitle">扫地机器人智能客服 v2.0</div>
 
-        <div class="section">会话 ID</div>
-        <div class="session-id" id="sessionIdDisplay">—</div>
-
         <button class="new-chat-btn" onclick="newSession()">＋ 新建对话</button>
+
+        <div class="section" style="margin-top:20px">历史会话</div>
+        <div class="session-list" id="sessionList">
+            <div class="no-sessions">暂无历史会话</div>
+        </div>
 
         <div class="info">
             <span class="dot"></span>
@@ -365,36 +427,172 @@
     </div>
 
     <script>
-        // ---- State ----
-        let sessionId = generateId();
+        // ============================================================
+        // State
+        // ============================================================
+        const STORAGE_KEY = 'zst_sessions';
+        let sessionId = null;
         let isStreaming = false;
 
-        document.getElementById('sessionIdDisplay').textContent = sessionId;
+        // ============================================================
+        // localStorage helpers
+        // ============================================================
+        function loadSessions() {
+            try {
+                return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+            } catch { return []; }
+        }
 
-        // ---- ID generation ----
+        function saveSessions(list) {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+        }
+
+        function upsertSession(id, updates = {}) {
+            const list = loadSessions();
+            const idx = list.findIndex(s => s.id === id);
+            const now = Date.now();
+            if (idx >= 0) {
+                list[idx] = { ...list[idx], ...updates, lastActive: now };
+            } else {
+                list.push({ id, preview: '', messageCount: 0, createdAt: now, lastActive: now, ...updates });
+            }
+            saveSessions(list);
+        }
+
+        function removeSessionFromStorage(id) {
+            const list = loadSessions().filter(s => s.id !== id);
+            saveSessions(list);
+            return list;
+        }
+
+        // ============================================================
+        // ID generation
+        // ============================================================
         function generateId() {
             return 'sess_' + Math.random().toString(36).substring(2, 10);
         }
 
-        function newSession() {
-            sessionId = generateId();
-            document.getElementById('sessionIdDisplay').textContent = sessionId;
-            const chatArea = document.getElementById('chatArea');
-            chatArea.innerHTML = `
-                <div class="empty-state">
-                    <div class="icon">🤖</div>
-                    <h3>开始新对话</h3>
-                    <p>有什么可以帮你的？</p>
-                </div>`;
+        // ============================================================
+        // Session list rendering
+        // ============================================================
+        function renderSessionList() {
+            const list = loadSessions();
+            const container = document.getElementById('sessionList');
+            if (list.length === 0) {
+                container.innerHTML = '<div class="no-sessions">暂无历史会话</div>';
+                return;
+            }
+
+            container.innerHTML = list
+                .sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))
+                .map(s => {
+                    const activeClass = s.id === sessionId ? ' active' : '';
+                    const timeStr = formatTime(s.lastActive || s.createdAt);
+                    const preview = s.preview || '(空会话)';
+                    return `<div class="session-item${activeClass}" data-id="${s.id}" onclick="switchSession('${s.id}')">
+                        <div class="session-time">${timeStr}</div>
+                        <div class="session-preview">${escapeHtml(preview)}</div>
+                        <button class="session-delete" onclick="deleteSession(event, '${s.id}')" title="删除会话">🗑</button>
+                    </div>`;
+                })
+                .join('');
         }
 
-        // ---- Auto resize textarea ----
+        function formatTime(ts) {
+            const now = Date.now();
+            const diff = now - ts;
+            const mins = Math.floor(diff / 60000);
+            if (mins < 1) return '刚刚';
+            if (mins < 60) return `${mins} 分钟前`;
+            const hours = Math.floor(mins / 60);
+            if (hours < 24) return `${hours} 小时前`;
+            const days = Math.floor(hours / 24);
+            if (days < 7) return `${days} 天前`;
+            return new Date(ts).toLocaleDateString('zh-CN');
+        }
+
+        // ============================================================
+        // Session switching
+        // ============================================================
+        async function switchSession(id) {
+            if (id === sessionId) return;
+            sessionId = id;
+            renderSessionList();
+
+            const chatArea = document.getElementById('chatArea');
+            chatArea.innerHTML = '<div class="thinking">加载历史消息中…</div>';
+
+            try {
+                const resp = await fetch(`/api/v1/sessions/${id}/messages`);
+                const data = await resp.json();
+                chatArea.innerHTML = '';
+
+                if (data.messages && data.messages.length > 0) {
+                    data.messages.forEach(m => {
+                        appendMessage(m.role === 'user' ? 'user' : 'assistant', m.content);
+                    });
+                    scrollBottom();
+                } else {
+                    chatArea.innerHTML = `<div class="empty-state">
+                        <div class="icon">🤖</div>
+                        <h3>空会话</h3>
+                        <p>该会话暂无消息记录</p>
+                    </div>`;
+                }
+            } catch {
+                chatArea.innerHTML = `<div class="empty-state">
+                    <div class="icon">⚠️</div>
+                    <h3>加载失败</h3>
+                    <p>无法加载会话历史，请检查网络连接</p>
+                </div>`;
+            }
+        }
+
+        function newSession() {
+            sessionId = generateId();
+            upsertSession(sessionId);
+            renderSessionList();
+            document.getElementById('chatArea').innerHTML = `<div class="empty-state">
+                <div class="icon">🤖</div>
+                <h3>开始新对话</h3>
+                <p>有什么可以帮你的？</p>
+            </div>`;
+        }
+
+        async function deleteSession(e, id) {
+            e.stopPropagation();
+            if (!confirm('确定要删除该会话吗？此操作不可撤销。')) return;
+
+            // 从 localStorage 移除
+            const remaining = removeSessionFromStorage(id);
+
+            // 从 Redis 清理
+            try { await fetch(`/api/v1/sessions/${id}`, { method: 'DELETE' }); } catch {}
+
+            // 如果删除的是当前会话，切换到最近的
+            if (id === sessionId) {
+                if (remaining.length > 0) {
+                    sessionId = remaining[0].id;
+                    await switchSession(sessionId);
+                } else {
+                    newSession();
+                }
+            }
+
+            renderSessionList();
+        }
+
+        // ============================================================
+        // Auto resize textarea
+        // ============================================================
         function autoResize(el) {
             el.style.height = 'auto';
             el.style.height = Math.min(el.scrollHeight, 150) + 'px';
         }
 
-        // ---- Keyboard ----
+        // ============================================================
+        // Keyboard
+        // ============================================================
         function handleKey(e) {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -402,15 +600,19 @@
             }
         }
 
-        // ---- Quick prompts ----
+        // ============================================================
+        // Quick prompts
+        // ============================================================
         function sendQuick(el) {
             document.getElementById('userInput').value = el.textContent;
             sendMessage();
         }
 
-        // ---- Send message ----
+        // ============================================================
+        // Send message
+        // ============================================================
         async function sendMessage() {
-            if (isStreaming) return;
+            if (isStreaming || !sessionId) return;
 
             const input = document.getElementById('userInput');
             const query = input.value.trim();
@@ -432,6 +634,14 @@
             // Add user message
             appendMessage('user', query);
             scrollBottom();
+
+            // Update session metadata (preview = first user message)
+            const sessions = loadSessions();
+            const cur = sessions.find(s => s.id === sessionId);
+            if (!cur || !cur.preview) {
+                upsertSession(sessionId, { preview: query });
+                renderSessionList();
+            }
 
             // Add thinking indicator
             const thinkingEl = addThinking();
@@ -487,6 +697,10 @@
                     assistantBubble.textContent = '（未收到回复）';
                 }
 
+                // Update session lastActive
+                upsertSession(sessionId, { messageCount: (cur ? cur.messageCount || 0 : 0) + 2 });
+                renderSessionList();
+
                 // Reset UI
                 isStreaming = false;
                 sendBtn.classList.remove('sending');
@@ -495,7 +709,9 @@
             }
         }
 
-        // ---- Append message ----
+        // ============================================================
+        // Append message
+        // ============================================================
         function appendMessage(role, content) {
             const chatArea = document.getElementById('chatArea');
             const div = document.createElement('div');
@@ -521,26 +737,27 @@
             return div;
         }
 
-        // ---- Render markdown content ----
+        // ============================================================
+        // Render markdown content
+        // ============================================================
         function renderContent(bubble, text) {
-            // Clean thinking tags if any
             let cleaned = text
                 .replace(/思考[：:][\s\S]*?(?=\n\n|$)/g, (match) => {
                     return `<div class="tool-call"><div class="tool-name">💭 ReAct 思考</div><div class="tool-result">${escapeHtml(match)}</div></div>`;
                 });
 
-            // Render markdown
             try {
                 bubble.innerHTML = marked.parse(cleaned);
             } catch {
                 bubble.textContent = text;
             }
 
-            // Add target="_blank" to links
             bubble.querySelectorAll('a').forEach(a => a.target = '_blank');
         }
 
-        // ---- Thinking indicator ----
+        // ============================================================
+        // Thinking indicator
+        // ============================================================
         function addThinking() {
             const chatArea = document.getElementById('chatArea');
             const div = document.createElement('div');
@@ -550,7 +767,9 @@
             return div;
         }
 
-        // ---- Scroll ----
+        // ============================================================
+        // Scroll
+        // ============================================================
         function scrollBottom() {
             const chatArea = document.getElementById('chatArea');
             requestAnimationFrame(() => {
@@ -558,14 +777,32 @@
             });
         }
 
-        // ---- Escape HTML ----
+        // ============================================================
+        // Escape HTML
+        // ============================================================
         function escapeHtml(str) {
             const div = document.createElement('div');
             div.textContent = str;
             return div.innerHTML;
         }
 
-        // ---- Init ----
+        // ============================================================
+        // Init
+        // ============================================================
+        function initApp() {
+            const sessions = loadSessions();
+            if (sessions.length > 0) {
+                // 恢复最近活跃的会话
+                sessions.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
+                sessionId = sessions[0].id;
+                switchSession(sessionId);
+            } else {
+                newSession();
+            }
+            renderSessionList();
+        }
+
+        document.addEventListener('DOMContentLoaded', initApp);
         document.getElementById('userInput').focus();
     </script>
 </body>
