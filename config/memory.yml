@@ -1,0 +1,21 @@
+# 记忆系统配置
+
+# 短期记忆 (Redis 滑动窗口)
+short_term:
+  max_rounds: 10           # 最近 N 轮对话
+  ttl_hours: 24            # Redis key 存活时间（小时）
+  archive_threshold: 10    # 超过此轮数触发摘要归档到长期记忆
+
+# 长期记忆 (向量库存储)
+long_term:
+  collection_name: long_term_memory   # Chroma collection 名称
+  persist_directory: chroma_db        # 持久化目录
+  similarity_k: 3                     # 检索相关记忆数
+  summary_max_tokens: 200             # 摘要最大 token 数
+
+# Redis 连接
+redis:
+  host: localhost
+  port: 6379
+  db: 0
+  password: ""             # 留空表示无密码

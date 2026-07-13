@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Chroma DB (auto-generated)
+chroma_db/
+rag/chroma_db/
+agent/chroma_db/
+
+# Logs
+logs/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# MD5 store (auto-generated)
+md5.text
+
+# Server data (auto-generated)
+server/data/

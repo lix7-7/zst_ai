@@ -1,0 +1,20 @@
+collection_name: agent
+persist_directory: chroma_db
+k: 3
+data_path: data
+md5_hex_store: md5.text
+allow_knowledge_file_type: ["txt", "pdf"]
+
+chunk_size: 200
+chunk_overlap: 20
+separators: ["\n\n", "\n", ".", "!", "?", "。", "！", "？", " ", ""]
+
+# 混合检索配置 (BM25 + Dense Vector + RRF + Reranker)
+hybrid_search:
+  enabled: true
+  dense_k: 20          # Dense 语义检索返回数
+  sparse_k: 20         # BM25 关键词检索返回数
+  final_k: 5           # 最终返回文档数
+  rrf_k: 60            # RRF 平滑参数（标准值 60）
+  rerank_top_n: 20     # RRF 融合后送入 Reranker 的候选数
+  rerank_model: qwen3-rerank  # DashScope 重排序模型

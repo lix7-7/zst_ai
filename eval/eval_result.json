@@ -1,0 +1,57 @@
+{
+  "system": "智扫通 RAG 检索评测",
+  "evaluation_date": "2026-07-14 01:15:37",
+  "test_queries_count": 30,
+  "vector_store_documents": 326,
+  "categories": {
+    "选购指南": 7,
+    "故障排查": 7,
+    "维护保养": 7,
+    "使用技巧": 9
+  },
+  "results": {
+    "Dense Only": {
+      "hit_rate@1": 0.8667,
+      "hit_rate@3": 1.0,
+      "hit_rate@5": 1.0,
+      "strict_hit_rate@3": 0.8667,
+      "strict_hit_rate@5": 0.8667,
+      "mrr": 0.9278,
+      "avg_keyword_coverage": 0.667
+    },
+    "BM25 Only": {
+      "hit_rate@1": 0.8,
+      "hit_rate@3": 0.9,
+      "hit_rate@5": 0.9,
+      "strict_hit_rate@3": 0.8333,
+      "strict_hit_rate@5": 0.8333,
+      "mrr": 0.8444,
+      "avg_keyword_coverage": 0.643
+    },
+    "Hybrid (RRF)": {
+      "hit_rate@1": 0.8667,
+      "hit_rate@3": 0.9333,
+      "hit_rate@5": 0.9667,
+      "strict_hit_rate@3": 0.9,
+      "strict_hit_rate@5": 0.9,
+      "mrr": 0.8972,
+      "avg_keyword_coverage": 0.73
+    },
+    "Hybrid + Rerank": {
+      "hit_rate@1": 0.9667,
+      "hit_rate@3": 0.9667,
+      "hit_rate@5": 1.0,
+      "strict_hit_rate@3": 0.9667,
+      "strict_hit_rate@5": 0.9667,
+      "mrr": 0.975,
+      "avg_keyword_coverage": 0.797
+    }
+  },
+  "rerank_vs_dense": {
+    "strict_hit_rate@5_lift_pct": 11.5,
+    "kw_coverage_lift_pct": 19.5
+  },
+  "rerank_vs_rrf": {
+    "strict_hit_rate@5_lift_pct": 7.4
+  }
+}
