@@ -58,11 +58,12 @@ FastAPI (api/main.py + api/routers/) — SSE streaming + REST endpoints
 
 **The 8 tools:** `rag_summarize`, `get_weather`, `get_user_location`, `get_user_id`, `get_current_month`, `fetch_external_data`, `fill_context_for_report`, `memory_recall`.
 
-**The 4 middleware** (LangChain 1.x decorator-based middleware API):
+**The 5 middleware** (LangChain 1.x decorator-based middleware API):
 - `monitor_tool` (`@wrap_tool_call`) — logs tool calls/errors; when `fill_context_for_report` is called, injects `context["report"]=True`
 - `log_before_model` (`@before_model`) — logs message history before each LLM call
 - `report_prompt_switch` (`@dynamic_prompt`) — detects `context["report"]==True` and switches from `main_prompt.txt` to `report_prompt.txt`
-- `memory_inject` (`@before_model`) — injects short-term + long-term memory context into the system prompt before each model call
+- `memory_inject` (`@before_model`) — injects short-term + long-term memory context into the system prompt before each model call (with dedup guard to prevent repeated injection during ReAct loops)
+- `token_guard` (`@before_model`) — [NEW] estimates total token count via tiktoken (with heuristic fallback), trims oldest history messages when over budget, and triggers LLM summarization of trimmed messages to preserve context continuity
 
 **Hybrid RAG pipeline** (`rag/`):
 Documents → MD5 dedup → Chinese-aware chunking → Chroma DB.
@@ -72,6 +73,7 @@ Retrieval: BM25 keyword search (jieba tokenization) + Dense Vector (Chroma) → 
 - `ShortTermMemory` — Redis sliding window (recent N rounds per session)
 - `LongTermMemory` — conversation summaries stored in Chroma, semantically retrieved for context
 - `MemoryManager` — unified entry point; gracefully degrades when Redis is unavailable
+- **Token window management** — `utils/token_counter.py` provides tiktoken-based estimation + heuristic fallback; `token_guard` middleware enforces budget via history trimming + LLM summarization. Config in `config/memory.yml` `token_window` section.
 
 **Runtime context flow for report generation:**
 1. User requests a report → Agent calls `fill_context_for_report`

@@ -19,3 +19,10 @@ redis:
   port: 6379
   db: 0
   password: ""             # 留空表示无密码
+
+# Token 窗口管理
+token_window:
+  max_context_tokens: 8000           # 上下文 token 上限（含 system prompt + 历史 + 消息列表）
+  reserved_response_tokens: 2000     # 预留给 LLM 输出的 token 数
+  summarize_trigger_messages: 6      # 触发 LLM 摘要的最小被裁消息数（6 条 = 3 轮）
+  safety_margin: 0.15               # token 估算安全系数（15%）
