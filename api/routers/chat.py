@@ -42,8 +42,13 @@ async def chat_stream(request: ChatRequest, req: Request):
         full_response = []
         try:
             async for chunk in agent.execute_stream_async(request.query, request.session_id):
-                full_response.append(chunk)
-                yield format_sse({"type": "content", "content": chunk.rstrip("\n")})
+                if chunk.startswith('{"type":'):
+                    # 工具调用/结果事件（已是 JSON 格式）
+                    yield format_sse(json.loads(chunk))
+                else:
+                    # 普通文本 token（逐字流式输出）
+                    full_response.append(chunk)
+                    yield format_sse({"type": "content", "content": chunk})
 
             logger.info(f"[SSE] 对话完成 session={request.session_id}, 响应长度={len(''.join(full_response))}")
             yield format_sse({"type": "done"})
