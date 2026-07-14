@@ -42,7 +42,7 @@ async def chat_stream(request: ChatRequest, req: Request):
         full_response = []
         try:
             async for chunk in agent.execute_stream_async(
-                request.query, request.session_id, request.user_id
+                request.query, request.session_id
             ):
                 if chunk.startswith('{"type":'):
                     # 工具调用/结果事件（已是 JSON 格式）
@@ -64,14 +64,7 @@ async def chat_stream(request: ChatRequest, req: Request):
                     session_id=request.session_id,
                     user_msg=request.query,
                     assistant_msg=assistant_text,
-                    user_id=request.user_id,
                 )
-                # 有 user_id 时注册/刷新会话归属
-                if request.user_id:
-                    await mgr.register_user_session(
-                        request.user_id, request.session_id,
-                        preview=request.query[:50],
-                    )
             except Exception as e:
                 logger.warning(f"记忆保存失败 (非致命): {str(e)}")
 
@@ -94,38 +87,11 @@ async def chat_stream(request: ChatRequest, req: Request):
 # ---- 会话管理 API ----
 
 @router.get("/sessions", response_model=SessionListResponse)
-async def list_sessions(req: Request, user_id: str = None):
-    """
-    列出会话。
-
-    - 无 user_id: 扫描所有 Redis 会话（旧行为，向后兼容）
-    - 有 user_id: 从用户索引快速查询（新行为）
-    """
+async def list_sessions(req: Request):
+    """列出所有 Redis 会话"""
     try:
         mgr = req.app.state.memory_manager
-        if mgr is None:
-            return SessionListResponse(user_id=user_id or "", sessions=[])
-
-        # ---- 新路径：用户过滤 ----
-        if user_id:
-            sessions_meta = await mgr.get_user_sessions(user_id)
-            from datetime import datetime, timezone
-            sessions = [
-                SessionInfo(
-                    session_id=m["session_id"],
-                    user_id=m.get("user_id", user_id),
-                    message_count=m.get("message_count", 0),
-                    last_active=datetime.fromtimestamp(
-                        m["last_active"], tz=timezone.utc
-                    ).isoformat() if m.get("last_active") else None,
-                    preview=m.get("preview", ""),
-                )
-                for m in sessions_meta
-            ]
-            return SessionListResponse(user_id=user_id, sessions=sessions)
-
-        # ---- 旧路径：全量扫描（向后兼容） ----
-        if mgr.short_term is None or mgr.short_term.redis is None:
+        if mgr is None or mgr.short_term is None or mgr.short_term.redis is None:
             return SessionListResponse(sessions=[])
 
         redis_client = mgr.short_term.redis
@@ -178,7 +144,7 @@ async def list_sessions(req: Request, user_id: str = None):
 
     except Exception as e:
         logger.warning(f"[Session] 列会话失败: {e}")
-        return SessionListResponse(user_id=user_id or "", sessions=[])
+        return SessionListResponse(sessions=[])
 
 
 @router.get("/sessions/{session_id}/messages", response_model=SessionMessagesResponse)
@@ -206,12 +172,12 @@ async def get_session_messages(session_id: str, req: Request):
 
 
 @router.delete("/sessions/{session_id}", response_model=DeleteSessionResponse)
-async def delete_session(session_id: str, req: Request, user_id: str = None):
-    """删除指定会话（Redis + 用户索引）"""
+async def delete_session(session_id: str, req: Request):
+    """删除指定会话"""
     try:
         mgr = req.app.state.memory_manager
         if mgr is not None:
-            await mgr.clear(session_id, user_id=user_id)
+            await mgr.clear(session_id)
         return DeleteSessionResponse(success=True, session_id=session_id)
     except Exception as e:
         logger.warning(f"[Session] 删除会话失败 session={session_id}: {e}")

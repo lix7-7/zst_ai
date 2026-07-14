@@ -1,7 +1,7 @@
 from typing import Callable, Awaitable
-from utils.prompt_loader import load_system_prompts, load_report_prompts
+from utils.prompt_loader import load_system_prompts
 from langchain.agents import AgentState
-from langchain.agents.middleware import wrap_tool_call, before_model, dynamic_prompt, ModelRequest
+from langchain.agents.middleware import wrap_tool_call, before_model, ModelRequest
 from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.runtime import Runtime
@@ -29,9 +29,6 @@ async def monitor_tool(
 
         logger.info(f"[tool monitor]工具{request.tool_call['name']}调用成功")
 
-        if request.tool_call['name'] == "fill_context_for_report":
-            request.runtime.context["report"] = True
-
         return result
     except Exception as e:
         logger.error(f"工具{request.tool_call['name']}调用失败，原因：{str(e)}")
@@ -50,15 +47,6 @@ async def log_before_model(
         logger.debug(f"[log_before_model]{type(last_msg).__name__} | {str(last_msg.content)[:200]}")
 
     return None
-
-
-@dynamic_prompt                 # 每一次在生成提示词之前，调用此函数
-def report_prompt_switch(request: ModelRequest):     # 动态切换提示词
-    is_report = request.runtime.context.get("report", False)
-    if is_report:               # 是报告生成场景，返回报告生成提示词内容
-        return load_report_prompts()
-
-    return load_system_prompts()
 
 
 @before_model

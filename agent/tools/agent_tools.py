@@ -7,8 +7,6 @@ from utils.logger_handler import logger
 from langchain_core.tools import tool
 from rag.rag_service import RagSummarizeService
 import random
-from utils.config_handler import agent_conf
-from utils.path_tool import get_abs_path
 
 rag = RagSummarizeService()
 
@@ -16,12 +14,6 @@ rag = RagSummarizeService()
 AMAP_API_KEY = os.environ.get("AMAP_API_KEY", "ce34f5ed99c414fc11a9a345c98ff79f")
 AMAP_IP_URL = "https://restapi.amap.com/v3/ip"
 AMAP_WEATHER_URL = "https://restapi.amap.com/v3/weather/weatherInfo"
-
-user_ids = ["1001", "1002", "1003", "1004", "1005", "1006", "1007", "1008", "1009", "1010",]
-month_arr = ["2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06",
-             "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12", ]
-
-external_data = {}
 
 
 def _http_get(url: str) -> dict:
@@ -88,7 +80,6 @@ def get_user_location() -> str:
 
     if data.get("status") != "1":
         logger.warning(f"[get_user_location] 高德 IP 定位 API 返回异常: {data}")
-        # 兜底：返回一个随机的国内主要城市
         fallback = random.choice(["深圳", "北京", "上海", "杭州", "广州"])
         logger.info(f"[get_user_location] 兜底返回: {fallback}")
         return fallback
@@ -97,90 +88,10 @@ def get_user_location() -> str:
     province = data.get("province", "")
 
     if not city:
-        # 如果 city 为空（如直辖市），尝试用 province
         city = province or "未知城市"
 
     logger.info(f"[get_user_location] IP定位结果: {province} {city}")
     return city
-
-
-@tool(description="获取用户的ID，以纯字符串形式返回")
-def get_user_id() -> str:
-    return random.choice(user_ids)
-
-
-@tool(description="获取当前月份，以纯字符串形式返回")
-def get_current_month() -> str:
-    return random.choice(month_arr)
-
-
-def generate_external_data():
-    """
-    {
-        "user_id": {
-            "month" : {"特征": xxx, "效率": xxx, ...}
-            "month" : {"特征": xxx, "效率": xxx, ...}
-            "month" : {"特征": xxx, "效率": xxx, ...}
-            ...
-        },
-        "user_id": {
-            "month" : {"特征": xxx, "效率": xxx, ...}
-            "month" : {"特征": xxx, "效率": xxx, ...}
-            "month" : {"特征": xxx, "效率": xxx, ...}
-            ...
-        },
-        "user_id": {
-            "month" : {"特征": xxx, "效率": xxx, ...}
-            "month" : {"特征": xxx, "效率": xxx, ...}
-            "month" : {"特征": xxx, "效率": xxx, ...}
-            ...
-        },
-        ...
-    }
-    :return:
-    """
-    if not external_data:
-        external_data_path = get_abs_path(agent_conf["external_data_path"])
-
-        if not os.path.exists(external_data_path):
-            raise FileNotFoundError(f"外部数据文件{external_data_path}不存在")
-
-        with open(external_data_path, "r", encoding="utf-8") as f:
-            for line in f.readlines()[1:]:
-                arr: list[str] = line.strip().split(",")
-
-                user_id: str = arr[0].replace('"', "")
-                feature: str = arr[1].replace('"', "")
-                efficiency: str = arr[2].replace('"', "")
-                consumables: str = arr[3].replace('"', "")
-                comparison: str = arr[4].replace('"', "")
-                time: str = arr[5].replace('"', "")
-
-                if user_id not in external_data:
-                    external_data[user_id] = {}
-
-                external_data[user_id][time] = {
-                    "特征": feature,
-                    "效率": efficiency,
-                    "耗材": consumables,
-                    "对比": comparison,
-                }
-
-
-@tool(description="从外部系统中获取指定用户在指定月份的使用记录，以纯字符串形式返回， 如果未检索到返回空字符串")
-def fetch_external_data(user_id: str, month: str) -> str:
-    generate_external_data()
-
-    try:
-        return external_data[user_id][month]
-    except KeyError:
-        logger.warning(f"[fetch_external_data]未能检索到用户：{user_id}在{month}的使用记录数据")
-        return ""
-
-
-@tool(description="无入参，无返回值，调用后触发中间件自动为报告生成的场景动态注入上下文信息，为后续提示词切换提供上下文信息")
-def fill_context_for_report():
-    return "fill_context_for_report已调用"
 
 
 @tool(description="检索历史对话记忆和用户偏好。当用户提到之前聊过的内容、询问与自己相关的问题、或需要参考历史对话时调用")
@@ -207,7 +118,6 @@ def memory_recall(query: str) -> str:
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # 在已有事件循环中，使用 run_coroutine_threadsafe 或创建新 loop
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(
