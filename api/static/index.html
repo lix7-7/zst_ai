@@ -276,6 +276,19 @@
             40% { transform: translateY(-6px); }
         }
 
+        /* Tool call status */
+        .tool-status {
+            display: flex; align-items: center; gap: 8px;
+            padding: 10px 16px; margin: 4px 0;
+            background: #f0f9ff; border: 1px solid #bae6fd;
+            border-radius: 8px; font-size: 13px; color: #0369a1;
+            animation: fadeIn .3s ease;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
         /* Input */
         .input-area {
             padding: 16px 32px 24px;
@@ -544,7 +557,7 @@
                                 ? new Date(s.last_active).getTime()
                                 : Date.now(),
                             messageCount: s.message_count,
-                            createdAt: Date.now(),
+                            createdAt: cache[s.session_id]?.createdAt || Date.now(),
                         };
                     });
                     saveSessions(Object.values(cache));
@@ -783,6 +796,20 @@
                             fullContent += data.content;
                             renderContent(assistantBubble, fullContent);
                             scrollBottom();
+                        } else if (data.type === 'tool_call') {
+                            const toolName = data.tool || '工具调用';
+                            const argsStr = data.args ? JSON.stringify(data.args) : '';
+                            const el = document.createElement('div');
+                            el.className = 'tool-status';
+                            el.innerHTML = `🔧 <b>${escapeHtml(toolName)}</b>`;
+                            if (argsStr) el.title = argsStr;
+                            chatArea.appendChild(el);
+                            scrollBottom();
+                        } else if (data.type === 'tool_result') {
+                            // 工具结果 — 移除对应的 tool_call 状态提示
+                            const statuses = chatArea.querySelectorAll('.tool-status');
+                            const lastStatus = statuses[statuses.length - 1];
+                            if (lastStatus) lastStatus.remove();
                         } else if (data.type === 'done') {
                             // Finished
                         } else if (data.type === 'error') {

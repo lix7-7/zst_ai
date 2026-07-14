@@ -13,7 +13,7 @@ from utils.path_tool import get_abs_path
 rag = RagSummarizeService()
 
 # 高德地图 Web 服务 API Key（从环境变量读取，未设置时天气/定位功能降级）
-AMAP_API_KEY = os.environ.get("AMAP_API_KEY", "")
+AMAP_API_KEY = os.environ.get("AMAP_API_KEY", "ce34f5ed99c414fc11a9a345c98ff79f")
 AMAP_IP_URL = "https://restapi.amap.com/v3/ip"
 AMAP_WEATHER_URL = "https://restapi.amap.com/v3/weather/weatherInfo"
 

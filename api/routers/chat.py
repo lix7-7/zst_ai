@@ -72,8 +72,8 @@ async def chat_stream(request: ChatRequest, req: Request):
                         request.user_id, request.session_id,
                         preview=request.query[:50],
                     )
-            except Exception:
-                pass  # 记忆保存失败不影响响应
+            except Exception as e:
+                logger.warning(f"记忆保存失败 (非致命): {str(e)}")
 
         except Exception as e:
             logger.error(f"[SSE] 对话异常 session={request.session_id}: {str(e)}")
