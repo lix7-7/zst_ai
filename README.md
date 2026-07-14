@@ -1,7 +1,7 @@
 # 智扫通 · 扫地机器人智能客服 Agent
 
 > 基于 LangChain 1.x ReAct Agent + 混合 RAG 检索 + SSE 流式输出的垂直领域智能客服系统。
-> 覆盖售前咨询、故障排查、个性化报告生成等核心客服场景。
+> 覆盖售前咨询、故障排查、环境适配建议等核心客服场景。
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.11+-blue" alt="Python">
@@ -32,38 +32,33 @@
 
 - **售前咨询**：基于私有知识库（产品手册、100 问、故障排除等）的精准 RAG 问答
 - **场景适配**：结合用户所在城市实时天气（高德 API），给出适配的机器人使用建议
-- **个性化报告**：根据用户使用记录生成结构化使用情况报告与保养建议
+- **记忆增强**：双层记忆系统（Redis 短期 + Chroma 长期），跨会话上下文召回
 
 ---
 
 ## 核心特性
 
-### 1. ReAct Agent + 8 工具编排
+### 1. ReAct Agent + 4 工具编排
 
-基于 LangChain 1.x `create_agent` API，Agent 自主决策调用 **8 个工具**：
+基于 LangChain 1.x `create_agent` API，Agent 自主决策调用 **4 个工具**：
 
 | 工具 | 类型 | 说明 |
 |------|------|------|
 | `rag_summarize` | RAG 检索 | 从知识库检索文档并生成总结回答 |
 | `get_weather` | 真实 API | 高德天气 API，获取指定城市实时天气 |
 | `get_user_location` | 真实 API | 高德 IP 定位，获取用户所在城市 |
-| `get_user_id` | Mock | 模拟用户身份识别 |
-| `get_current_month` | Mock | 模拟当前月份查询 |
-| `fetch_external_data` | 数据源 | 读取用户使用记录 CSV |
-| `fill_context_for_report` | 触发器 | 触发中间件切换到报告生成模式 |
 | `memory_recall` | 记忆检索 | 从长期记忆库语义检索历史对话 |
 
 ### 2. Middleware 中间件机制
 
-5 个中间件解耦横切关注点，按执行顺序：
+4 个中间件解耦横切关注点，按执行顺序：
 
 | # | 中间件 | 装饰器 | 作用 |
 |---|--------|--------|------|
 | 1 | `monitor_tool` | `@wrap_tool_call` | 工具调用日志/异常捕获/运行时上下文注入 |
 | 2 | `log_before_model` | `@before_model` | 每次 LLM 调用前打印消息摘要 |
-| 3 | `report_prompt_switch` | `@dynamic_prompt` | 检测 `context.report` → 动态切换系统提示词 |
-| 4 | `memory_inject` | `@before_model` | 注入 Redis 短期 + Chroma 长期记忆到上下文 |
-| 5 | `token_guard` | `@before_model` | tiktoken 估算 → 超限裁剪 → LLM 摘要压缩 |
+| 3 | `memory_inject` | `@before_model` | 注入 Redis 短期 + Chroma 长期记忆到上下文 |
+| 4 | `token_guard` | `@before_model` | tiktoken 估算 → 超限裁剪 → LLM 摘要压缩 |
 
 ### 3. 混合 RAG 检索管道
 
@@ -98,7 +93,7 @@
 ### 6. 工程化设计
 
 - **FastAPI 服务化**：lifespan 管理单例，RESTful API + SSE StreamingResponse，自动生成 `/docs`
-- **用户 ID 会话管理**：用户自定义身份标识，会话按用户隔离，Redis 索引支撑跨设备恢复
+- **localStorage 会话管理**：前端本地存储会话元数据，Redis 后端持久化消息历史，支持会话切换与历史恢复
 - **配置驱动**：5 个 YAML 配置文件管理所有参数
 - **工厂模式**：`BaseModelFactory` 抽象基类封装模型实例化
 - **优雅降级**：Redis 不可用 → 记忆返回空；Reranker 失败 → 回退 RRF；记忆保存失败 → 不影响响应
@@ -125,8 +120,8 @@ FastAPI (api/main.py)
 ReactAgent (agent/react_agent.py)
   │  create_agent(model, tools, middleware)
   │  astream(stream_mode="messages")
-  ├── 8 Tools ──── rag / weather / location / memory / external data
-  ├── 5 Middleware ──── monitor / log / prompt switch / memory / token guard
+  ├── 4 Tools ──── rag / weather / location / memory
+  ├── 4 Middleware ──── monitor / log / memory / token guard
   └── Memory System ──── Redis (short-term) + Chroma (long-term)
 ```
 
@@ -139,7 +134,7 @@ ReactAgent (agent/react_agent.py)
 - Python ≥ 3.11
 - 阿里云 DashScope API Key（通义千问 + Embeddings + Reranker）
 - Redis（可选，用于多轮对话记忆）
-- WSL2（Windows 用户运行 Redis 需要）
+- Docker Desktop（Windows 用户运行 Redis 需要）
 
 ### 1. 克隆项目
 
@@ -176,14 +171,12 @@ export AMAP_API_KEY="你的高德Key"
 ### 4. 启动 Redis（可选）
 
 ```bash
-# Windows (WSL2)
-wsl -u root bash -c "redis-server --daemonize yes"
+# Windows / macOS / Linux（Docker）
+docker run -d --name redis-zst -p 6379:6379 redis:7-alpine
 
-# macOS
-brew services start redis
-
-# Linux
-sudo systemctl start redis
+# 之后启动/停止
+docker start redis-zst
+docker stop redis-zst
 ```
 
 > Redis 不可用时系统自动降级，对话功能不受影响，仅记忆系统不可用。
@@ -203,7 +196,7 @@ python -m rag.vector_store
 uvicorn api.main:app --reload --port 8000
 ```
 
-浏览器访问 `http://localhost:8000`，输入用户 ID 即可开始对话。API 文档在 `http://localhost:8000/docs`。
+浏览器访问 `http://localhost:8000` 即可开始对话。API 文档在 `http://localhost:8000/docs`。
 
 ---
 
@@ -228,19 +221,6 @@ Agent：[思考] 需要获取位置和天气
        [观察] 信息充足 → 流式输出综合建议...
 ```
 
-### 场景三：个性化报告生成（动态提示词切换）
-
-```
-用户：给我生成我的使用报告
-Agent：[调用 fill_context_for_report]
-       → monitor_tool 注入 context.report = True
-       → dynamic_prompt 切换到 report_prompt.txt
-       [调用 get_user_id] → 1003
-       [调用 get_current_month] → 2025-06
-       [调用 fetch_external_data("1003", "2025-06")] → 使用记录
-       → 生成结构化 Markdown 报告...
-```
-
 ---
 
 ## 项目结构
@@ -257,8 +237,8 @@ zst_ai/
 ├── agent/                          # Agent 编排层
 │   ├── react_agent.py              # ReactAgent 封装
 │   └── tools/
-│       ├── agent_tools.py          # 8 个工具定义
-│       └── middleware.py           # 5 个中间件
+│       ├── agent_tools.py          # 4 个工具定义
+│       └── middleware.py           # 4 个中间件
 ├── rag/                            # RAG 检索层
 │   ├── hybrid_retriever.py         # BM25 + Dense + RRF + Reranker
 │   ├── rag_service.py              # 检索 + LLM 总结 Chain
@@ -266,7 +246,7 @@ zst_ai/
 ├── memory/                         # 记忆系统
 │   ├── short_term.py               # Redis 滑动窗口
 │   ├── long_term.py                # Chroma 对话摘要检索
-│   └── manager.py                  # 统一入口 + 用户-会话关联
+│   └── manager.py                  # 统一入口，双存储协调
 ├── model/
 │   └── factory.py                  # 模型工厂 (ChatTongyi / Embeddings)
 ├── utils/                          # 基础设施
@@ -288,9 +268,8 @@ zst_ai/
 │   └── memory.yml                  # Redis + Token 窗口配置
 ├── prompts/                        # 提示词模板
 │   ├── main_prompt.txt             # 客服主提示词
-│   ├── rag_summarize.txt           # RAG 总结提示词
-│   └── report_prompt.txt           # 报告生成提示词
-├── data/                           # 知识库文档 + 外部数据
+│   └── rag_summarize.txt           # RAG 总结提示词
+├── data/                           # 知识库文档
 └── requirements.txt
 ```
 
@@ -302,8 +281,8 @@ zst_ai/
 |----------|---------|
 | `config/rag.yml` | LLM 模型名、Embedding 模型名 |
 | `config/chroma.yml` | 分片策略、检索 top-k、混合检索参数（BM25/Dense/RRF/Reranker） |
-| `config/prompts.yml` | 3 套提示词文件路径 |
-| `config/agent.yml` | 外部数据源路径 |
+| `config/prompts.yml` | 2 套提示词文件路径 |
+| `config/agent.yml` | Agent 业务配置 |
 | `config/memory.yml` | Redis 连接、窗口大小、Token 预算、摘要触发阈值 |
 
 所有配置通过 `utils/config_handler.py` 加载为模块级单例，运行时零 IO。

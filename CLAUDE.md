@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**ZhiSaoTong (智扫通)** — a FastAPI + SSE streaming intelligent customer service agent for robot vacuum cleaners. Uses LangChain 1.x ReAct Agent + RAG (BM25 + Dense + RRF + Cross-Encoder Reranker) over a private knowledge base to handle pre-sales Q&A, environment-aware recommendations, and personalized usage report generation.
+**ZhiSaoTong (智扫通)** — a FastAPI + SSE streaming intelligent customer service agent for robot vacuum cleaners. Uses LangChain 1.x ReAct Agent + RAG (BM25 + Dense + RRF + Cross-Encoder Reranker) over a private knowledge base to handle pre-sales Q&A, environment-aware recommendations, and multi-turn conversations with memory.
 
 ## Commands
 
@@ -27,7 +27,7 @@ python -m eval.evaluate
 # Re-index knowledge base via API
 curl -X POST http://localhost:8000/api/v1/knowledge/reindex
 
-# Redis (WSL2 on Windows) — start if not running
+# Redis (Docker) — start if not running
 docker start redis-zst
 ```
 
@@ -45,8 +45,8 @@ FastAPI (api/main.py) — lifespan-managed Agent + Memory singletons
   ├── api/schemas/chat.py      — Pydantic request/response models
   └── api/static/index.html    — vanilla JS chat UI (SSE EventSource, localStorage sessions, marked.js)
   └── agent/react_agent.py     — ReactAgent wrapping langchain create_agent
-       ├── agent/tools/agent_tools.py   — 8 @tool functions
-       ├── agent/tools/middleware.py    — 5 middleware hooks
+       ├── agent/tools/agent_tools.py   — 4 @tool functions
+       ├── agent/tools/middleware.py    — 4 middleware hooks
        ├── rag/                         — hybrid retrieval pipeline
        ├── memory/                      — short-term (Redis) + long-term (Chroma) memory
        ├── model/factory.py             — ChatTongyi + DashScopeEmbeddings (factory pattern)
@@ -73,30 +73,22 @@ User sends query → event_generator() → agent.execute_stream_async()
 1. `ChatTongyi(streaming=True)` in `model/factory.py` — without this, LangChain falls back to `ainvoke()` producing a single chunk
 2. `stream_mode="messages"` on `agent.astream()` — `"values"` yields entire state per graph node; `"messages"` yields `(AIMessageChunk, metadata)` tuples
 
-### The 8 tools
+### The 4 tools
 
-`rag_summarize`, `get_weather`, `get_user_location`, `get_user_id`, `get_current_month`, `fetch_external_data`, `fill_context_for_report`, `memory_recall`.
+`rag_summarize`, `get_weather`, `get_user_location`, `memory_recall`.
 
-Real API: `get_weather` + `get_user_location` use Amap APIs. Mock: `get_user_id` + `get_current_month` return random choices. `fetch_external_data` reads `data/external/records.csv`. `fill_context_for_report` is a trigger tool (returns nothing, signals middleware to switch to report mode).
+Real API: `get_weather` + `get_user_location` use Amap APIs. `rag_summarize` performs hybrid RAG retrieval + LLM summarization. `memory_recall` semantically retrieves relevant conversation history from long-term memory.
 
-### The 5 middleware (LangChain 1.x decorator-based, ordered by execution)
+### The 4 middleware (LangChain 1.x decorator-based, ordered by execution)
 
 | # | Middleware | Decorator | Purpose |
 |---|-----------|-----------|---------|
-| 1 | `monitor_tool` | `@wrap_tool_call` | Log tool calls/errors; sets `context["report"]=True` when `fill_context_for_report` is called |
+| 1 | `monitor_tool` | `@wrap_tool_call` | Log tool calls/errors |
 | 2 | `log_before_model` | `@before_model` | Log message count + last message before each LLM call |
-| 3 | `report_prompt_switch` | `@dynamic_prompt` | Detects `context["report"]==True` → switches system prompt from `main_prompt.txt` to `report_prompt.txt` |
-| 4 | `memory_inject` | `@before_model` | Fetches short-term (Redis) + long-term (Chroma) memory, injects into system prompt. Uses `<!--memory_injected-->` guard to prevent repeated injection during ReAct loops |
-| 5 | `token_guard` | `@before_model` | Estimates tokens via tiktoken (heuristic fallback), trims oldest history when over budget, triggers LLM summarization of trimmed messages. Uses `<!--token_guarded-->` guard |
+| 3 | `memory_inject` | `@before_model` | Fetches short-term (Redis) + long-term (Chroma) memory, injects into system prompt. Uses `<!--memory_injected-->` guard to prevent repeated injection during ReAct loops |
+| 4 | `token_guard` | `@before_model` | Estimates tokens via tiktoken (heuristic fallback), trims oldest history when over budget, triggers LLM summarization of trimmed messages. Uses `<!--token_guarded-->` guard |
 
 **Middleware ordering matters:** `memory_inject` must run before `token_guard` — injection increases token count, so the guard must see the final system prompt.
-
-### Report generation context flow
-
-1. User requests a report → Agent calls `fill_context_for_report`
-2. `monitor_tool` intercepts → sets `runtime.context["report"] = True`
-3. Next model call → `report_prompt_switch` returns `report_prompt.txt`
-4. Agent operates in report-generation mode for the rest of the conversation
 
 ### Hybrid RAG pipeline (`rag/`)
 
@@ -115,7 +107,7 @@ Config in `config/chroma.yml` → `hybrid_search` section.
 
 Two-layer architecture:
 - **Backend**: REST API (`GET/DELETE /api/v1/chat/sessions`, `GET /sessions/{id}/messages`) scans Redis keys via SCAN (non-blocking), returns session metadata + message history
-- **Frontend**: `localStorage` stores session metadata (id, preview, lastActive). Survives page refresh. `initApp()` restores last active session. Session switching fetches history from backend API.
+- **Frontend**: `localStorage` stores session metadata (id, preview, lastActive, messageCount). Survives page refresh. `initApp()` restores last active session. Session switching fetches history from backend API.
 
 ## Key Patterns
 
