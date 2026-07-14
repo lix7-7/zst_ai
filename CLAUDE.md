@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**ZhiSaoTong (智扫通)** — a FastAPI + SSE streaming intelligent customer service agent for robot vacuum cleaners. Uses LangChain 1.x ReAct Agent + RAG (BM25 + Dense + RRF + Cross-Encoder Reranker) over a private knowledge base to handle pre-sales Q&A, environment-aware recommendations, and personalized usage report generation. Streamlit (`app.py`) retained as legacy UI.
+**ZhiSaoTong (智扫通)** — a FastAPI + SSE streaming intelligent customer service agent for robot vacuum cleaners. Uses LangChain 1.x ReAct Agent + RAG (BM25 + Dense + RRF + Cross-Encoder Reranker) over a private knowledge base to handle pre-sales Q&A, environment-aware recommendations, and personalized usage report generation.
 
 ## Commands
 
@@ -18,9 +18,6 @@ python -m rag.vector_store
 # Start the FastAPI server (primary — SSE streaming API + chat UI at http://localhost:8000)
 uvicorn api.main:app --reload --port 8000
 
-# Start the Streamlit web app (legacy UI at http://localhost:8501)
-streamlit run app.py
-
 # Test hybrid search independently
 python -m rag.hybrid_retriever
 
@@ -31,7 +28,7 @@ python -m eval.evaluate
 curl -X POST http://localhost:8000/api/v1/knowledge/reindex
 
 # Redis (WSL2 on Windows) — start if not running
-wsl -u root bash -c "redis-server --daemonize yes"
+docker start redis-zst
 ```
 
 Requires `DASHSCOPE_API_KEY` (Alibaba Cloud DashScope — LLM + Embeddings + Reranker).  

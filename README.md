@@ -201,9 +201,6 @@ python -m rag.vector_store
 ```bash
 # 主服务 — FastAPI + 聊天界面 (http://localhost:8000)
 uvicorn api.main:app --reload --port 8000
-
-# 备选 — Streamlit 界面 (http://localhost:8501)
-streamlit run app.py
 ```
 
 浏览器访问 `http://localhost:8000`，输入用户 ID 即可开始对话。API 文档在 `http://localhost:8000/docs`。
@@ -294,7 +291,6 @@ zst_ai/
 │   ├── rag_summarize.txt           # RAG 总结提示词
 │   └── report_prompt.txt           # 报告生成提示词
 ├── data/                           # 知识库文档 + 外部数据
-├── app.py                          # Streamlit 备选界面
 └── requirements.txt
 ```
 
