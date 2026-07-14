@@ -12,7 +12,7 @@ from utils.path_tool import get_abs_path
 
 rag = RagSummarizeService()
 
-# 高德地图 Web 服务 API Key（优先读环境变量）
+# 高德地图 Web 服务 API Key（从环境变量读取，未设置时天气/定位功能降级）
 AMAP_API_KEY = os.environ.get("AMAP_API_KEY", "")
 AMAP_IP_URL = "https://restapi.amap.com/v3/ip"
 AMAP_WEATHER_URL = "https://restapi.amap.com/v3/weather/weatherInfo"
@@ -46,6 +46,9 @@ def rag_summarize(query: str) -> str:
 @tool(description="获取指定城市的天气，以消息字符串的形式返回")
 def get_weather(city: str) -> str:
     """通过高德天气 API 获取指定城市的实时天气"""
+    if not AMAP_API_KEY:
+        return f"天气服务未配置（缺少 AMAP_API_KEY），无法获取{city}的天气信息"
+
     city_encoded = urllib.parse.quote(city)
     url = f"{AMAP_WEATHER_URL}?key={AMAP_API_KEY}&city={city_encoded}&extensions=base"
     data = _http_get(url)
@@ -75,6 +78,11 @@ def get_weather(city: str) -> str:
 @tool(description="获取用户所在城市的名称，以纯字符串形式返回")
 def get_user_location() -> str:
     """通过高德 IP 定位 API 获取当前用户的所在城市"""
+    if not AMAP_API_KEY:
+        fallback = random.choice(["深圳", "北京", "上海", "杭州", "广州"])
+        logger.info(f"[get_user_location] 未配置 AMAP_API_KEY，兜底返回: {fallback}")
+        return fallback
+
     url = f"{AMAP_IP_URL}?key={AMAP_API_KEY}"
     data = _http_get(url)
 
