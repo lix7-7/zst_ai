@@ -13,6 +13,12 @@ class ChatRequest(BaseModel):
         default_factory=lambda: uuid.uuid4().hex[:12],
         description="会话ID，用于关联多轮对话记忆"
     )
+    user_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=50,
+        description="用户标识。传入后将会话归属到该用户，可在会话列表中按用户筛选"
+    )
 
 
 class SSEChunk(BaseModel):
@@ -46,6 +52,7 @@ class HealthResponse(BaseModel):
 class SessionInfo(BaseModel):
     """单个会话的摘要信息"""
     session_id: str
+    user_id: Optional[str] = None
     message_count: int = 0
     last_active: Optional[str] = None  # ISO 时间戳
     preview: str = ""  # 会话预览（第一条用户消息）
@@ -53,6 +60,7 @@ class SessionInfo(BaseModel):
 
 class SessionListResponse(BaseModel):
     """会话列表响应"""
+    user_id: str = ""
     sessions: list[SessionInfo] = []
 
 

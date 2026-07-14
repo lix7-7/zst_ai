@@ -140,6 +140,100 @@ class ShortTermMemory:
         except Exception as e:
             logger.warning(f"[ShortTerm] 清除会话失败: {str(e)}")
 
+    # ============================================================
+    # 用户-会话关联 & 元数据管理
+    # ============================================================
+
+    @staticmethod
+    def _user_key(user_id: str) -> str:
+        """用户 → 会话索引 Key"""
+        return f"user:{user_id}:sessions"
+
+    @staticmethod
+    def _session_meta_key(session_id: str) -> str:
+        """会话元数据 Key"""
+        return f"session:{session_id}:meta"
+
+    async def register_session(
+        self, user_id: str, session_id: str, preview: str = ""
+    ) -> None:
+        """
+        将 session 归属到 user，初始化元数据
+
+        Args:
+            user_id: 用户标识
+            session_id: 会话ID
+            preview: 会话预览（通常为第一条用户消息，截取前50字）
+        """
+        if self.redis is None:
+            return
+        try:
+            now = time.time()
+            # SADD 关联
+            await self.redis.sadd(self._user_key(user_id), session_id)
+            await self.redis.expire(self._user_key(user_id), self.ttl_seconds)
+            # HSET 元数据
+            await self.redis.hset(self._session_meta_key(session_id), mapping={
+                "user_id": user_id,
+                "preview": preview[:100],
+                "last_active": str(now),
+                "message_count": "0",
+                "created_at": str(now),
+            })
+            await self.redis.expire(self._session_meta_key(session_id), self.ttl_seconds)
+            logger.debug(f"[ShortTerm] 注册会话 user={user_id} session={session_id}")
+        except Exception as e:
+            logger.warning(f"[ShortTerm] 注册会话失败 (非致命): {str(e)}")
+
+    async def update_session_meta(self, session_id: str, **updates) -> None:
+        """增量更新会话元数据字段（last_active / message_count / preview）"""
+        if self.redis is None:
+            return
+        try:
+            mapping = {k: str(v) for k, v in updates.items()}
+            await self.redis.hset(self._session_meta_key(session_id), mapping=mapping)
+            await self.redis.expire(self._session_meta_key(session_id), self.ttl_seconds)
+        except Exception as e:
+            logger.warning(f"[ShortTerm] 更新元数据失败 (非致命): {str(e)}")
+
+    async def get_user_session_ids(self, user_id: str) -> set[str]:
+        """获取某用户的所有会话 ID"""
+        if self.redis is None:
+            return set()
+        try:
+            return await self.redis.smembers(self._user_key(user_id))
+        except Exception:
+            return set()
+
+    async def get_session_meta(self, session_id: str) -> dict:
+        """读取会话元数据，不存在返回空 dict"""
+        if self.redis is None:
+            return {}
+        try:
+            raw = await self.redis.hgetall(self._session_meta_key(session_id))
+            if not raw:
+                return {}
+            return {
+                "user_id": raw.get("user_id", ""),
+                "preview": raw.get("preview", ""),
+                "last_active": float(raw.get("last_active", 0)),
+                "message_count": int(raw.get("message_count", 0)),
+                "created_at": float(raw.get("created_at", 0)),
+            }
+        except Exception:
+            return {}
+
+    async def unregister_session(self, session_id: str, user_id: str) -> None:
+        """从用户索引移除会话 + 删除元数据（不删消息）"""
+        if self.redis is None:
+            return
+        try:
+            await self.redis.srem(self._user_key(user_id), session_id)
+            await self.redis.delete(self._session_meta_key(session_id))
+            logger.debug(f"[ShortTerm] 注销会话 user={user_id} session={session_id}")
+        except Exception as e:
+            logger.warning(f"[ShortTerm] 注销会话失败 (非致命): {str(e)}")
+
     def format_for_prompt(self, messages: list[dict]) -> str:
         """将历史消息列表格式化为提示词可用的文本"""
         if not messages:

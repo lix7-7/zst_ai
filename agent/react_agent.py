@@ -41,7 +41,7 @@ class ReactAgent:
                     "content": str(msg.content)[:200]
                 }, ensure_ascii=False)
 
-    async def execute_stream_async(self, query: str, session_id: str = None):
+    async def execute_stream_async(self, query: str, session_id: str = None, user_id: str = None):
         """
         异步流式执行（FastAPI SSE 兼容）
 
@@ -50,9 +50,11 @@ class ReactAgent:
           - AIMessageChunk(content="...") → 直接产出 token 文本
           - AIMessageChunk(tool_calls=[...]) → 产出 JSON 工具调用事件
           - ToolMessage → 产出 JSON 工具结果事件
+
+        user_id 通过 runtime.context 传入 middleware，供 memory_inject 使用。
         """
         input_dict = {"messages": [{"role": "user", "content": query}]}
-        context = {"report": False, "session_id": session_id}
+        context = {"report": False, "session_id": session_id, "user_id": user_id}
 
         async for msg, metadata in self.agent.astream(
             input_dict, stream_mode="messages", context=context

@@ -358,6 +358,9 @@
         .empty-state h3 { font-size: 20px; color: var(--text); font-weight: 600; }
         .empty-state p { font-size: 14px; max-width: 400px; text-align: center; }
 
+        #userIdInput:focus { border-color: var(--primary); }
+        #userIdInput::placeholder { color: #64748b; }
+
         @media (max-width: 768px) {
             .sidebar { display: none; }
             .message { max-width: 95%; }
@@ -371,6 +374,28 @@
     <aside class="sidebar">
         <div class="logo">智<span>扫</span>通</div>
         <div class="subtitle">扫地机器人智能客服 v2.0</div>
+
+        <!-- 用户 ID 输入 -->
+        <div class="section" style="margin-top:4px">用户标识</div>
+        <div style="display:flex;gap:4px;margin-bottom:4px">
+            <input
+                id="userIdInput"
+                type="text"
+                placeholder="输入你的用户ID..."
+                maxlength="50"
+                onkeydown="if(event.key==='Enter')onUserIdChange(this.value)"
+                style="flex:1;padding:8px 10px;border:1px solid #475569;border-radius:6px;
+                       background:#334155;color:#e2e8f0;font-size:13px;outline:none;"
+            />
+            <button onclick="onUserIdChange(document.getElementById('userIdInput').value)"
+                    style="padding:8px 12px;background:var(--primary);color:#fff;border:none;
+                           border-radius:6px;cursor:pointer;font-size:12px;white-space:nowrap;">
+                进入
+            </button>
+        </div>
+        <div id="userIdHint" style="font-size:11px;color:#64748b;margin-bottom:4px">
+            输入ID后可跨设备查看历史会话
+        </div>
 
         <button class="new-chat-btn" onclick="newSession()">＋ 新建对话</button>
 
@@ -431,7 +456,9 @@
         // State
         // ============================================================
         const STORAGE_KEY = 'zst_sessions';
+        const USER_STORAGE_KEY = 'zst_user_id';
         let sessionId = null;
+        let userId = '';
         let isStreaming = false;
 
         // ============================================================
@@ -466,6 +493,69 @@
         }
 
         // ============================================================
+        // User ID management
+        // ============================================================
+        function onUserIdChange(value) {
+            const trimmed = value.trim().substring(0, 50);
+            if (trimmed) {
+                userId = trimmed;
+                localStorage.setItem(USER_STORAGE_KEY, trimmed);
+                document.getElementById('userIdHint').textContent =
+                    '✅ 用户 ' + trimmed + ' · 正在加载会话...';
+                fetchAndRenderSessions().then(() => {
+                    // 加载该用户的最近会话或创建新会话
+                    const sessions = loadSessions();
+                    if (sessions.length > 0) {
+                        sessions.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
+                        if (!sessionId || !sessions.find(s => s.id === sessionId)) {
+                            sessionId = sessions[0].id;
+                            switchSession(sessionId);
+                        }
+                    } else {
+                        newSession();
+                    }
+                });
+            } else {
+                userId = '';
+                localStorage.removeItem(USER_STORAGE_KEY);
+                document.getElementById('userIdHint').textContent =
+                    '输入ID后可跨设备查看历史会话';
+                renderSessionListFromLocal();
+            }
+        }
+
+        async function fetchAndRenderSessions() {
+            if (!userId) { renderSessionListFromLocal(); return; }
+            try {
+                const resp = await fetch(
+                    `/api/v1/chat/sessions?user_id=${encodeURIComponent(userId)}`
+                );
+                const data = await resp.json();
+                if (data.sessions && data.sessions.length > 0) {
+                    // 合并后端数据到 localStorage 缓存
+                    const cache = {};
+                    const localList = loadSessions();
+                    localList.forEach(s => { cache[s.id] = s; });
+                    data.sessions.forEach(s => {
+                        cache[s.session_id] = {
+                            id: s.session_id,
+                            preview: s.preview,
+                            lastActive: s.last_active
+                                ? new Date(s.last_active).getTime()
+                                : Date.now(),
+                            messageCount: s.message_count,
+                            createdAt: Date.now(),
+                        };
+                    });
+                    saveSessions(Object.values(cache));
+                }
+            } catch (err) {
+                console.warn('后端会话列表加载失败，使用本地缓存', err);
+            }
+            renderSessionListFromLocal();
+        }
+
+        // ============================================================
         // ID generation
         // ============================================================
         function generateId() {
@@ -475,7 +565,7 @@
         // ============================================================
         // Session list rendering
         // ============================================================
-        function renderSessionList() {
+        function renderSessionListFromLocal() {
             const list = loadSessions();
             const container = document.getElementById('sessionList');
             if (list.length === 0) {
@@ -496,6 +586,14 @@
                     </div>`;
                 })
                 .join('');
+        }
+
+        function renderSessionList() {
+            if (userId) {
+                fetchAndRenderSessions();
+            } else {
+                renderSessionListFromLocal();
+            }
         }
 
         function formatTime(ts) {
@@ -523,7 +621,7 @@
             chatArea.innerHTML = '<div class="thinking">加载历史消息中…</div>';
 
             try {
-                const resp = await fetch(`/api/v1/sessions/${id}/messages`);
+                const resp = await fetch(`/api/v1/chat/sessions/${id}/messages`);
                 const data = await resp.json();
                 chatArea.innerHTML = '';
 
@@ -555,7 +653,7 @@
             document.getElementById('chatArea').innerHTML = `<div class="empty-state">
                 <div class="icon">🤖</div>
                 <h3>开始新对话</h3>
-                <p>有什么可以帮你的？</p>
+                <p>${userId ? '用户 ' + userId + ' · ' : ''}有什么可以帮你的？</p>
             </div>`;
         }
 
@@ -566,8 +664,10 @@
             // 从 localStorage 移除
             const remaining = removeSessionFromStorage(id);
 
-            // 从 Redis 清理
-            try { await fetch(`/api/v1/sessions/${id}`, { method: 'DELETE' }); } catch {}
+            // 从 Redis 清理（带 user_id）
+            const url = `/api/v1/chat/sessions/${id}` +
+                (userId ? `?user_id=${encodeURIComponent(userId)}` : '');
+            try { await fetch(url, { method: 'DELETE' }); } catch {}
 
             // 如果删除的是当前会话，切换到最近的
             if (id === sessionId) {
@@ -656,7 +756,11 @@
                 const response = await fetch('/api/v1/chat/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query, session_id: sessionId }),
+                    body: JSON.stringify({
+                        query,
+                        session_id: sessionId,
+                        user_id: userId || null,
+                    }),
                 });
 
                 const reader = response.body.getReader();
@@ -790,16 +894,40 @@
         // Init
         // ============================================================
         function initApp() {
-            const sessions = loadSessions();
-            if (sessions.length > 0) {
-                // 恢复最近活跃的会话
-                sessions.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
-                sessionId = sessions[0].id;
-                switchSession(sessionId);
-            } else {
-                newSession();
+            // 恢复上次使用的 user ID
+            userId = localStorage.getItem(USER_STORAGE_KEY) || '';
+            if (userId) {
+                document.getElementById('userIdInput').value = userId;
+                document.getElementById('userIdHint').textContent =
+                    '✅ 用户 ' + userId + ' · 正在加载会话...';
             }
-            renderSessionList();
+
+            // 先从 localStorage 快速渲染
+            renderSessionListFromLocal();
+
+            // 有 userId 时从后端拉取会话列表
+            if (userId) {
+                fetchAndRenderSessions().then(() => {
+                    const sessions = loadSessions();
+                    if (sessions.length > 0) {
+                        sessions.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
+                        sessionId = sessions[0].id;
+                        switchSession(sessionId);
+                    } else {
+                        newSession();
+                    }
+                });
+            } else {
+                // 无 userId：纯本地模式
+                const sessions = loadSessions();
+                if (sessions.length > 0) {
+                    sessions.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
+                    sessionId = sessions[0].id;
+                    switchSession(sessionId);
+                } else {
+                    newSession();
+                }
+            }
         }
 
         document.addEventListener('DOMContentLoaded', initApp);
