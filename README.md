@@ -1,7 +1,15 @@
 # 智扫通 · 扫地机器人智能客服 Agent
 
-> 基于 LangChain 1.x 新版 Agent API + ReAct 推理范式 + RAG 检索增强的垂直领域智能客服系统。
-> 支持多场景工具编排、动态提示词切换、流式输出，覆盖售前咨询、故障排查、个性化使用报告生成等核心客服场景。
+> 基于 LangChain 1.x ReAct Agent + 混合 RAG 检索 + SSE 流式输出的垂直领域智能客服系统。
+> 覆盖售前咨询、故障排查、个性化报告生成等核心客服场景。
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11+-blue" alt="Python">
+  <img src="https://img.shields.io/badge/LangChain-1.x-orange" alt="LangChain">
+  <img src="https://img.shields.io/badge/FastAPI-0.115+-green" alt="FastAPI">
+  <img src="https://img.shields.io/badge/LLM-通义千问%20qwen3.7--max-red" alt="LLM">
+  <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License">
+</p>
 
 ---
 
@@ -10,232 +18,116 @@
 - [项目背景](#项目背景)
 - [核心特性](#核心特性)
 - [系统架构](#系统架构)
-- [技术选型说明](#技术选型说明)
-- [项目结构](#项目结构)
 - [快速开始](#快速开始)
 - [使用示例](#使用示例)
+- [项目结构](#项目结构)
 - [配置说明](#配置说明)
-- [路线图](#路线图)
+- [技术栈](#技术栈)
 
 ---
 
 ## 项目背景
 
-扫地机器人品类存在「售前选购决策复杂 + 售后使用问题专业 + 用户使用数据难以洞察」三大客服痛点。本项目以 ReAct Agent 为核心，结合垂直知识库 RAG 与用户使用记录检索，构建一个能「思考-行动-观察」的智能客服：
+扫地机器人品类存在「选购决策复杂 + 售后问题专业 + 用户数据难以洞察」三大客服痛点。本项目以 ReAct Agent 为核心，结合垂直知识库 RAG 与用户使用记录检索，构建一个能「思考—行动—观察」的智能客服：
 
 - **售前咨询**：基于私有知识库（产品手册、100 问、故障排除等）的精准 RAG 问答
-- **场景适配**：结合用户所在城市实时天气，给出适配的机器人使用建议
+- **场景适配**：结合用户所在城市实时天气（高德 API），给出适配的机器人使用建议
 - **个性化报告**：根据用户使用记录生成结构化使用情况报告与保养建议
 
 ---
 
 ## 核心特性
 
-### 1. ReAct Agent + 多工具编排
-基于 LangChain 1.x 新版 `create_agent` API，封装 7 个垂直工具（RAG 检索、天气查询、用户信息、报告数据等），Agent 自主决策调用链路。
+### 1. ReAct Agent + 8 工具编排
 
-### 2. Middleware 中间件机制（核心亮点）
-使用 LangChain 新版 middleware API 实现三类横切关注点：
+基于 LangChain 1.x `create_agent` API，Agent 自主决策调用 **8 个工具**：
 
-| 中间件 | 装饰器 | 作用 |
-|---|---|---|
-| `monitor_tool` | `@wrap_tool_call` | 工具调用前后日志监控、异常捕获、运行时上下文注入 |
-| `log_before_model` | `@before_model` | 模型调用前打印消息历史，便于调试多轮推理 |
-| `report_prompt_switch` | `@dynamic_prompt` | **基于 runtime context 动态切换系统提示词**，实现「客服问答」与「报告生成」两套提示词的无缝切换 |
+| 工具 | 类型 | 说明 |
+|------|------|------|
+| `rag_summarize` | RAG 检索 | 从知识库检索文档并生成总结回答 |
+| `get_weather` | 真实 API | 高德天气 API，获取指定城市实时天气 |
+| `get_user_location` | 真实 API | 高德 IP 定位，获取用户所在城市 |
+| `get_user_id` | Mock | 模拟用户身份识别 |
+| `get_current_month` | Mock | 模拟当前月份查询 |
+| `fetch_external_data` | 数据源 | 读取用户使用记录 CSV |
+| `fill_context_for_report` | 触发器 | 触发中间件切换到报告生成模式 |
+| `memory_recall` | 记忆检索 | 从长期记忆库语义检索历史对话 |
 
-### 3. 完整 RAG 链路
-- 文档加载（PDF / TXT 双格式）
-- 文件 MD5 去重，避免重复入库
-- `RecursiveCharacterTextSplitter` 递归分片（按中文标点智能切分）
-- Chroma 向量库持久化
-- 检索 + 总结 Chain（Prompt | Model | Parser）
+### 2. Middleware 中间件机制
 
-### 4. 工程化设计
-- **配置驱动**：所有参数（模型、向量库、分片策略、提示词路径）通过 YAML 配置
-- **工厂模式**：`BaseModelFactory` 抽象基类统一管理 ChatModel / Embeddings 实例化
-- **统一日志**：按日期分文件、控制台 + 文件双输出、DEBUG/INFO 分级
-- **统一路径管理**：`get_abs_path` 解决相对路径在不同启动目录下的歧义
+5 个中间件解耦横切关注点，按执行顺序：
 
-### 5. 流式输出
-基于 `agent.stream(stream_mode="values")` 实现真正的逐 token 流式响应，前端 Streamlit `write_stream` 逐字符渲染。
+| # | 中间件 | 装饰器 | 作用 |
+|---|--------|--------|------|
+| 1 | `monitor_tool` | `@wrap_tool_call` | 工具调用日志/异常捕获/运行时上下文注入 |
+| 2 | `log_before_model` | `@before_model` | 每次 LLM 调用前打印消息摘要 |
+| 3 | `report_prompt_switch` | `@dynamic_prompt` | 检测 `context.report` → 动态切换系统提示词 |
+| 4 | `memory_inject` | `@before_model` | 注入 Redis 短期 + Chroma 长期记忆到上下文 |
+| 5 | `token_guard` | `@before_model` | tiktoken 估算 → 超限裁剪 → LLM 摘要压缩 |
+
+### 3. 混合 RAG 检索管道
+
+```
+用户查询
+  → BM25 关键词检索 (jieba 分词, top 20)
+  → Dense Vector 语义检索 (Chroma, top 20)
+  → RRF 融合 (Reciprocal Rank Fusion, k=60)
+  → Cross-Encoder Reranker 精排 (qwen3-rerank)
+  → Top-5 文档 → LLM 总结回答
+```
+
+- **MD5 去重**：4KB 流式分块计算，避免重复入库
+- **中文分片**：RecursiveCharacterTextSplitter，按中文标点智能切分
+- **评测体系**：30 条标注测试集 × 4 路检索器对比 × 多维度指标（Hit Rate@k、MRR、关键词覆盖率）+ RAGAS 生成质量评测
+
+### 4. SSE 逐 Token 流式输出
+
+- 基于 LangGraph `stream_mode="messages"` + `ChatTongyi(streaming=True)` 实现 token 级流式
+- FastAPI `StreamingResponse(media_type="text/event-stream")` 推送
+- 前端 `EventSource` 消费 + `marked.js` 实时 Markdown 渲染
+- 工具调用/结果以 JSON 事件形式嵌入 SSE 流
+
+### 5. 双层记忆系统 + Token 窗口管理
+
+| 层级 | 存储 | 说明 |
+|------|------|------|
+| 短期记忆 | Redis List | 滑动窗口（LPUSH + LTRIM），每会话 10 轮，TTL 24h |
+| 长期记忆 | Chroma 向量库 | 对话摘要 → 语义检索，跨会话记忆召回 |
+| Token 守卫 | tiktoken / 启发式 | 超限自动裁剪最早消息 + LLM 摘要压缩 |
+
+### 6. 工程化设计
+
+- **FastAPI 服务化**：lifespan 管理单例，RESTful API + SSE StreamingResponse，自动生成 `/docs`
+- **用户 ID 会话管理**：用户自定义身份标识，会话按用户隔离，Redis 索引支撑跨设备恢复
+- **配置驱动**：5 个 YAML 配置文件管理所有参数
+- **工厂模式**：`BaseModelFactory` 抽象基类封装模型实例化
+- **优雅降级**：Redis 不可用 → 记忆返回空；Reranker 失败 → 回退 RRF；记忆保存失败 → 不影响响应
+- **统一日志**：按日期分文件，DEBUG 到文件 / INFO 到控制台
 
 ---
 
 ## 系统架构
 
-### 整体架构图
-
-```mermaid
-flowchart TB
-    subgraph UI["前端层"]
-        ST[Streamlit Web UI]
-    end
-
-    subgraph AgentLayer["Agent 编排层"]
-        RA[ReactAgent]
-        MW1["monitor_tool<br/>(工具调用监控)"]
-        MW2["log_before_model<br/>(模型前日志)"]
-        MW3["report_prompt_switch<br/>(动态提示词切换)"]
-        LLM[ChatTongyi<br/>qwen3.7-max]
-    end
-
-    subgraph ToolsLayer["工具层"]
-        T1[rag_summarize]
-        T2[get_weather]
-        T3[get_user_location]
-        T4[get_user_id]
-        T5[get_current_month]
-        T6[fetch_external_data]
-        T7[fill_context_for_report]
-    end
-
-    subgraph RAGLayer["RAG 检索层"]
-        RS[RagSummarizeService]
-        VS[VectorStoreService]
-        Chroma[(Chroma<br/>向量库)]
-        DocLoader[文档加载器<br/>PDF/TXT]
-    end
-
-    subgraph DataLayer["数据层"]
-        Knowledge[(data/<br/>知识库文档)]
-        Records[(data/external/<br/>用户使用记录 CSV)]
-    end
-
-    subgraph ModelLayer["模型层"]
-        F[ModelFactory<br/>工厂模式]
-        Embed[DashScopeEmbeddings<br/>text-embedding-v4]
-    end
-
-    ST -->|用户提问| RA
-    RA --> MW2 --> MW3 --> LLM
-    LLM -->|工具调用| MW1
-    MW1 --> T1 & T2 & T3 & T4 & T5 & T6 & T7
-
-    T1 --> RS
-    RS --> VS
-    VS --> Chroma
-    Chroma -.检索.-> RS
-    DocLoader -->|MD5去重+分片| Chroma
-    Knowledge --> DocLoader
-
-    T6 --> Records
-    T7 -.注入context.-> MW3
-
-    F --> LLM
-    F --> Embed
-    Embed -.向量化.-> Chroma
-
-    style MW3 fill:#ffe4b5
-    style Chroma fill:#e0f0ff
-    style LLM fill:#fff0e0
 ```
-
-### ReAct 推理流程
-
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant A as ReactAgent
-    participant M as Middleware
-    participant T as Tools
-    participant R as RAG/数据源
-
-    U->>A: "深圳最近适合用扫地机器人吗？"
-    A->>M: before_model hook
-    M->>M: dynamic_prompt(默认客服提示词)
-    A->>A: ReAct 思考：需要天气信息
-    A->>M: wrap_tool_call(get_user_location)
-    M->>T: get_user_location
-    T-->>A: "深圳"
-    A->>M: wrap_tool_call(get_weather)
-    M->>T: get_weather("深圳")
-    T-->>A: 天气数据
-    A->>A: ReAct 观察：信息充足
-    A-->>U: 流式输出最终回答
-```
-
-### 报告生成场景的提示词切换
-
-```mermaid
-flowchart LR
-    A[用户: 生成我的使用报告] --> B[Agent 识别报告意图]
-    B --> C[调用 fill_context_for_report]
-    C --> D[monitor_tool 拦截]
-    D --> E[runtime.context.report = True]
-    E --> F[下一轮模型调用前]
-    F --> G[dynamic_prompt 检测 context]
-    G --> H{report == True?}
-    H -->|是| I[加载 report_prompt.txt]
-    H -->|否| J[加载 main_prompt.txt]
-    I --> K[Agent 按报告流程<br/>调用工具取数并生成]
-```
-
----
-
-## 技术选型说明
-
-| 层级 | 技术 | 版本 | 选型理由 |
-|---|---|---|---|
-| **Agent 框架** | LangChain | 1.3.11 | 选用 1.x 新版 API（`create_agent` + middleware），相比旧版 `AgentExecutor` 提供更细粒度的生命周期 hook，支持动态提示词、工具监控等横切关注点的解耦实现 |
-| **状态机引擎** | LangGraph | 1.2.6 | LangChain 1.x 底层依赖，提供 `Runtime` 上下文与 `context` 透传能力，是动态提示词切换的技术基础 |
-| **LLM** | 通义千问 qwen3.7-max | - | 中文场景表现优秀，DashScope API 稳定，原生支持工具调用 |
-| **Embeddings** | text-embedding-v4 | - | 阿里最新版向量模型，中文检索效果好，与 LLM 同生态便于统一管理 |
-| **向量数据库** | Chroma | 1.5.9 | 轻量级、嵌入式部署、原生支持持久化，适合中小规模知识库（百万级以下 chunk）的开发与验证场景 |
-| **文档加载** | PyPDFLoader / TextLoader | - | LangChain 原生集成，支持 PDF 文本提取与中文 TXT 编码兼容 |
-| **文本分片** | RecursiveCharacterTextSplitter | - | 按分隔符优先级递归切分（`\n\n` → `\n` → 中文标点 → 空格），保证语义完整性 |
-| **Web UI** | Streamlit | 1.58.0 | 数据应用快速原型工具，内置 `chat_input` / `write_stream` 组件，适合 Agent 类应用的对话式交互 |
-
-### 关键设计决策
-
-**Q：为什么用 middleware 而不是直接在 Agent 主流程里写日志/切换逻辑？**
-A：Middleware 实现了业务逻辑与横切关注点的解耦。`report_prompt_switch` 这类动态提示词切换如果硬编码在主流程中，会导致 Agent 类臃肿且难以扩展。通过 `@dynamic_prompt` 装饰器，提示词策略可以独立演进（未来可扩展更多场景的提示词切换），而 Agent 本身只关心工具编排。
-
-**Q：为什么用文件 MD5 做知识库去重？**
-A：知识库迭代过程中，避免重复入库同一份文档导致检索结果冗余。MD5 计算成本低（4KB 分块流式读取避免大文件爆内存），持久化到 `md5.text` 文件，重启后仍生效。
-
-**Q：为什么用工厂模式封装模型？**
-A：未来可能切换到 OpenAI / 本地模型 / 其他厂商。工厂模式将模型实例化逻辑收敛到 `ModelFactory`，切换时只需新增 Factory 子类，调用方无感知。
-
----
-
-## 项目结构
-
-```
-py_ai/
-├── app.py                          # Streamlit 入口，对话 UI + 流式输出
-├── requirements.txt                # 依赖清单
-├── agent/                          # Agent 编排层
-│   ├── react_agent.py              # ReactAgent 封装
-│   └── tools/
-│       ├── agent_tools.py          # 7 个工具定义（@tool 装饰器）
-│       └── middleware.py           # 3 个中间件（监控/日志/动态提示词）
-├── rag/                            # RAG 检索层
-│   ├── rag_service.py              # 检索 + 总结 Chain
-│   └── vector_store.py             # Chroma 向量库 + 文档加载
-├── model/
-│   └── factory.py                  # 模型工厂（ChatModel / Embeddings）
-├── utils/                          # 基础设施
-│   ├── config_handler.py           # YAML 配置加载
-│   ├── prompt_loader.py            # 提示词文件加载
-│   ├── file_handler.py             # 文件 MD5 / PDF / TXT 加载
-│   ├── logger_handler.py           # 统一日志器
-│   └── path_tool.py                # 绝对路径管理
-├── config/                         # YAML 配置
-│   ├── rag.yml                     # 模型名称
-│   ├── chroma.yml                  # 向量库与分片参数
-│   ├── prompts.yml                 # 提示词文件路径
-│   └── agent.yml                   # Agent 业务配置
-├── prompts/                        # 提示词模板
-│   ├── main_prompt.txt             # 客服主提示词（ReAct 准则）
-│   ├── rag_summarize.txt           # RAG 总结提示词
-│   └── report_prompt.txt           # 报告生成专用提示词
-├── data/                           # 数据
-│   ├── *.txt / *.pdf               # 知识库源文档
-│   └── external/
-│       └── records.csv             # 用户使用记录（外部数据源）
-├── chroma_db/                      # Chroma 持久化目录（自动生成）
-├── logs/                           # 日志目录（自动生成）
-└── md5.text                        # 已入库文件的 MD5 记录（自动生成）
+用户浏览器 (index.html)
+  │  SSE EventSource
+  ▼
+FastAPI (api/main.py)
+  ├── POST /api/v1/chat/stream     ← SSE 流式对话
+  ├── GET  /api/v1/chat/sessions    ← 用户会话列表
+  ├── GET  /api/v1/chat/sessions/{id}/messages
+  ├── DELETE /api/v1/chat/sessions/{id}
+  ├── GET  /api/v1/knowledge/stats
+  ├── POST /api/v1/knowledge/reindex
+  └── GET  /api/v1/health
+  │
+  ▼
+ReactAgent (agent/react_agent.py)
+  │  create_agent(model, tools, middleware)
+  │  astream(stream_mode="messages")
+  ├── 8 Tools ──── rag / weather / location / memory / external data
+  ├── 5 Middleware ──── monitor / log / prompt switch / memory / token guard
+  └── Memory System ──── Redis (short-term) + Chroma (long-term)
 ```
 
 ---
@@ -245,15 +137,17 @@ py_ai/
 ### 环境要求
 
 - Python ≥ 3.11
-- 阿里云 DashScope API Key（用于通义千问 + 向量化模型）
+- 阿里云 DashScope API Key（通义千问 + Embeddings + Reranker）
+- Redis（可选，用于多轮对话记忆）
+- WSL2（Windows 用户运行 Redis 需要）
 
-### 1. 克隆并创建虚拟环境
+### 1. 克隆项目
 
 ```bash
-git clone <your-repo-url>
-cd py_ai
-
+git clone https://github.com/lix7-7/zst_ai.git
+cd zst_ai
 python -m venv .venv
+
 # Windows
 .venv\Scripts\activate
 # macOS / Linux
@@ -268,41 +162,51 @@ pip install -r requirements.txt
 
 ### 3. 配置环境变量
 
-DashScope API Key 通过环境变量注入（`langchain_community` 的通义千问集成默认读取 `DASHSCOPE_API_KEY`）：
-
 ```bash
 # Windows PowerShell
 $env:DASHSCOPE_API_KEY = "sk-xxxxxxxxxxxxxxxxxxxx"
+# 高德地图 API Key（可选，未设置时天气/定位功能降级）
+$env:AMAP_API_KEY = "你的高德Key"
 
 # macOS / Linux
 export DASHSCOPE_API_KEY="sk-xxxxxxxxxxxxxxxxxxxx"
+export AMAP_API_KEY="你的高德Key"
 ```
 
-### 4. 初始化知识库向量库（首次运行必做）
+### 4. 启动 Redis（可选）
 
-将知识库文档（PDF/TXT）放入 `data/` 目录后，执行：
+```bash
+# Windows (WSL2)
+wsl -u root bash -c "redis-server --daemonize yes"
+
+# macOS
+brew services start redis
+
+# Linux
+sudo systemctl start redis
+```
+
+> Redis 不可用时系统自动降级，对话功能不受影响，仅记忆系统不可用。
+
+### 5. 初始化知识库
+
+将知识库文档（PDF/TXT）放入 `data/` 目录后：
 
 ```bash
 python -m rag.vector_store
 ```
 
-执行后会看到日志输出：
-
-```
-[加载知识库]data/扫地机器人100问.pdf 内容加载成功
-[加载知识库]data/故障排除.txt 内容加载成功
-...
-```
-
-向量库会持久化到 `chroma_db/` 目录，后续启动无需重复初始化（除非新增文档）。
-
-### 5. 启动 Web 应用
+### 6. 启动服务
 
 ```bash
+# 主服务 — FastAPI + 聊天界面 (http://localhost:8000)
+uvicorn api.main:app --reload --port 8000
+
+# 备选 — Streamlit 界面 (http://localhost:8501)
 streamlit run app.py
 ```
 
-浏览器访问 `http://localhost:8501` 即可开始对话。
+浏览器访问 `http://localhost:8000`，输入用户 ID 即可开始对话。API 文档在 `http://localhost:8000/docs`。
 
 ---
 
@@ -313,87 +217,119 @@ streamlit run app.py
 ```
 用户：小户型适合哪些扫地机器人？
 Agent：[调用 rag_summarize("小户型 扫地机器人 选购")]
-       基于知识库检索结果，给出小户型选购建议...
+       → 混合检索 → Reranker 精排 → LLM 总结
+       → 流式输出选购建议...
 ```
 
 ### 场景二：环境适配咨询（多工具编排）
 
 ```
-用户：深圳最近适合用扫地机器人吗？
-Agent：[思考] 需要先获取用户位置和天气
-       [调用 get_user_location] → 深圳
-       [调用 get_weather("深圳")] → 天气数据
-       [观察] 信息充足，整合回答
-       基于深圳当前天气（晴天、湿度50%、AQI21）...
+用户：深圳今天适合用扫地机器人吗？
+Agent：[思考] 需要获取位置和天气
+       [调用 get_user_location] → "深圳"
+       [调用 get_weather("深圳")] → 晴天 28°C 湿度65%
+       [观察] 信息充足 → 流式输出综合建议...
 ```
 
 ### 场景三：个性化报告生成（动态提示词切换）
 
 ```
 用户：给我生成我的使用报告
-Agent：[识别报告意图]
-       [调用 fill_context_for_report] → 中间件注入 context.report=True
-       [下一轮] dynamic_prompt 切换到 report_prompt.txt
+Agent：[调用 fill_context_for_report]
+       → monitor_tool 注入 context.report = True
+       → dynamic_prompt 切换到 report_prompt.txt
        [调用 get_user_id] → 1003
        [调用 get_current_month] → 2025-06
        [调用 fetch_external_data("1003", "2025-06")] → 使用记录
-       [生成 Markdown 报告]
+       → 生成结构化 Markdown 报告...
+```
+
+---
+
+## 项目结构
+
+```
+zst_ai/
+├── api/                            # FastAPI 服务
+│   ├── main.py                     # 应用入口 + lifespan
+│   ├── routers/
+│   │   ├── chat.py                 # SSE 对话 + 会话管理 API
+│   │   └── knowledge.py            # 知识库管理 API
+│   ├── schemas/chat.py             # Pydantic 模型
+│   └── static/index.html           # 聊天界面 (vanilla JS)
+├── agent/                          # Agent 编排层
+│   ├── react_agent.py              # ReactAgent 封装
+│   └── tools/
+│       ├── agent_tools.py          # 8 个工具定义
+│       └── middleware.py           # 5 个中间件
+├── rag/                            # RAG 检索层
+│   ├── hybrid_retriever.py         # BM25 + Dense + RRF + Reranker
+│   ├── rag_service.py              # 检索 + LLM 总结 Chain
+│   └── vector_store.py             # Chroma 向量库 + 文档加载
+├── memory/                         # 记忆系统
+│   ├── short_term.py               # Redis 滑动窗口
+│   ├── long_term.py                # Chroma 对话摘要检索
+│   └── manager.py                  # 统一入口 + 用户-会话关联
+├── model/
+│   └── factory.py                  # 模型工厂 (ChatTongyi / Embeddings)
+├── utils/                          # 基础设施
+│   ├── config_handler.py           # YAML 配置加载
+│   ├── prompt_loader.py            # 提示词文件加载
+│   ├── token_counter.py            # tiktoken 估算 + 启发式 fallback
+│   ├── file_handler.py             # 文件 MD5 / PDF / TXT 加载
+│   ├── logger_handler.py           # 日志器
+│   └── path_tool.py                # 绝对路径管理
+├── eval/                           # RAG 评测
+│   ├── evaluate.py                 # 4 路检索器对比评测
+│   ├── test_queries.json           # 30 条标注测试集
+│   └── eval_result.json            # 最新评测结果
+├── config/                         # YAML 配置
+│   ├── rag.yml                     # 模型名称
+│   ├── chroma.yml                  # 向量库 + 混合检索参数
+│   ├── prompts.yml                 # 提示词路径
+│   ├── agent.yml                   # Agent 业务配置
+│   └── memory.yml                  # Redis + Token 窗口配置
+├── prompts/                        # 提示词模板
+│   ├── main_prompt.txt             # 客服主提示词
+│   ├── rag_summarize.txt           # RAG 总结提示词
+│   └── report_prompt.txt           # 报告生成提示词
+├── data/                           # 知识库文档 + 外部数据
+├── app.py                          # Streamlit 备选界面
+└── requirements.txt
 ```
 
 ---
 
 ## 配置说明
 
-### `config/rag.yml` — 模型配置
+| 配置文件 | 主要内容 |
+|----------|---------|
+| `config/rag.yml` | LLM 模型名、Embedding 模型名 |
+| `config/chroma.yml` | 分片策略、检索 top-k、混合检索参数（BM25/Dense/RRF/Reranker） |
+| `config/prompts.yml` | 3 套提示词文件路径 |
+| `config/agent.yml` | 外部数据源路径 |
+| `config/memory.yml` | Redis 连接、窗口大小、Token 预算、摘要触发阈值 |
 
-```yaml
-chat_model_name: qwen3.7-max           # 对话模型
-embedding_model_name: text-embedding-v4 # 向量化模型
-```
-
-### `config/chroma.yml` — 向量库与分片
-
-```yaml
-collection_name: agent                 # 集合名
-persist_directory: chroma_db           # 持久化目录
-k: 3                                   # 检索 top-k
-data_path: data                        # 知识库源目录
-md5_hex_store: md5.text                # MD5 去重记录文件
-allow_knowledge_file_type: ["txt", "pdf"]
-
-chunk_size: 200                        # 分片大小（字符数）
-chunk_overlap: 20                      # 分片重叠
-separators: ["\n\n", "\n", ".", "!", "?", "。", "！", "？", " ", ""]
-```
-
-### `config/prompts.yml` — 提示词路径
-
-```yaml
-main_prompt_path: prompts/main_prompt.txt              # 客服主提示词
-rag_summarize_prompt_path: prompts/rag_summarize.txt   # RAG 总结提示词
-report_prompt_path: prompts/report_prompt.txt          # 报告生成提示词
-```
-
-### `config/agent.yml` — Agent 业务配置
-
-```yaml
-external_data_path: data/external/records.csv          # 用户使用记录路径
-```
+所有配置通过 `utils/config_handler.py` 加载为模块级单例，运行时零 IO。
 
 ---
 
-## 路线图
+## 技术栈
 
-- [ ] **真实 API 接入**：`get_weather` 接入和风天气 API，替换当前 mock 数据
-- [ ] **数据源升级**：`fetch_external_data` 改为 SQLite/MySQL 查询，支持更大规模数据
-- [ ] **FastAPI 服务化**：将 Agent 能力封装为 REST API，支持前端解耦部署
-- [ ] **多轮对话上下文管理**：消息窗口截断 + 历史摘要压缩，避免 token 溢出
-- [ ] **可观测性**：接入 LangSmith / LangFuse，记录 trace 与工具调用链
-- [ ] **评测体系**：构造测试集，统计检索召回率、回答准确率、平均响应时延
-- [ ] **Docker 化**：`docker-compose` 一键启动应用 + 向量库
-- [ ] **多 Agent 协作**：拆分售前推荐 Agent 与售后诊断 Agent
-
----
+| 层级 | 技术 | 说明 |
+|------|------|------|
+| Agent 框架 | LangChain 1.x + LangGraph | `create_agent` + middleware 装饰器 API |
+| LLM | 通义千问 qwen3.7-max | DashScope API，原生支持工具调用 |
+| Embeddings | text-embedding-v4 | 阿里云 DashScope，中文语义检索 |
+| Reranker | qwen3-rerank | Cross-Encoder 交叉编码器精排 |
+| 向量库 | Chroma | 嵌入式部署，持久化存储 |
+| 关键词检索 | BM25 (rank_bm25) | jieba 中文分词 |
+| API 框架 | FastAPI | SSE StreamingResponse + RESTful |
+| 缓存 | Redis | 短期记忆滑动窗口 |
+| 前端 | Vanilla JS | EventSource SSE + marked.js 渲染 |
+| Token 估算 | tiktoken (cl100k_base) | 主方案 + 字符启发式 fallback |
+| 日志 | Python logging | 按日期分文件，双输出 |
+| 配置 | YAML | 5 文件配置驱动 |
 
 ## License
 
