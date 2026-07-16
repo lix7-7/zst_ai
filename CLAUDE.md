@@ -9,6 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
+# Requires Python >= 3.11
+
 # Install dependencies
 pip install -r requirements.txt
 
@@ -28,6 +30,7 @@ python -m eval.evaluate
 curl -X POST http://localhost:8000/api/v1/knowledge/reindex
 
 # Redis (Docker) — start if not running
+# Data persisted via AOF in container, mount to ./redis-data for host access
 docker start redis-zst
 ```
 
@@ -120,3 +123,5 @@ Two-layer architecture:
 - **MD5-based dedup** — `rag/vector_store.py` computes MD5 per file, compares against `md5.text`, only embeds new/changed files.
 - **Streaming chunk routing** — `execute_stream_async` yields both plain text tokens and JSON tool events. The SSE handler in `chat.py` routes by prefix: strings starting with `{"type":` are parsed as JSON tool events; everything else is a text token.
 - **Graceful degradation** — Redis failure → short-term memory returns empty. Reranker API failure → falls back to RRF ordering. Memory save failure → doesn't affect SSE response.
+- **Frontend CDN dependency** — `api/static/index.html` loads `marked.js` from CDN for Markdown rendering. Offline environments won't render chat messages properly.
+- **`data/external/` directory** — `records.csv` still exists on disk but is no longer used by any tool (report generation was removed). Safe to ignore or delete.
