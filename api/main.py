@@ -18,6 +18,7 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时初始化
     from utils.logger_handler import logger
+
     logger.info("[FastAPI] 智扫通 Agent API 启动中...")
 
     # 初始化记忆系统（Redis 不可用时降级运行）

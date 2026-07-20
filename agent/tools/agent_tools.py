@@ -108,26 +108,26 @@ def memory_recall(query: str) -> str:
     try:
         from memory.manager import MemoryManager
         import asyncio
+        import concurrent.futures
 
         mgr = MemoryManager.get_instance()
         long_term = mgr.long_term
         if long_term is None:
             return "记忆系统未初始化"
 
-        # 同步调用异步方法
+        async def _retrieve():
+            return await long_term.retrieve_relevant(query)
+
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        asyncio.run, long_term.retrieve_relevant(query)
-                    )
-                    memories = future.result(timeout=5)
-            else:
-                memories = loop.run_until_complete(long_term.retrieve_relevant(query))
+            loop = asyncio.get_running_loop()
         except RuntimeError:
-            memories = asyncio.run(long_term.retrieve_relevant(query))
+            # 没有运行中的 event loop，直接运行
+            memories = asyncio.run(_retrieve())
+        else:
+            # 有运行中的 event loop，在独立线程中运行避免冲突
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, _retrieve())
+                memories = future.result(timeout=10)
 
         if not memories:
             return "未找到相关历史记忆"

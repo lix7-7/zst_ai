@@ -58,7 +58,11 @@ async def memory_inject(
     记忆注入中间件：在每次模型调用前，将多轮对话记忆注入到消息列表
 
     从 runtime.context 中获取 session_id，拉取短期记忆（最近对话）和
-    长期记忆（语义检索相关历史摘要），注入到 system 消息中。
+    长期记忆（语义检索相关历史摘要），以 SystemMessage 形式插入消息列表头部。
+
+    注意：LangGraph 的 create_agent 将系统提示词存储在模型配置中，
+    state["messages"] 的第一条是 HumanMessage（用户输入），不是 SystemMessage。
+    因此我们直接 insert(0, SystemMessage) 而不是修改不存在的消息。
     """
     session_id = runtime.context.get("session_id")
     if not session_id:
@@ -66,7 +70,7 @@ async def memory_inject(
 
     # 防止 ReAct 循环中重复注入（每次 model call 都触发 @before_model）
     first_msg = state["messages"][0]
-    if hasattr(first_msg, "content") and "<!--memory_injected-->" in first_msg.content:
+    if hasattr(first_msg, "content") and "<!--memory_injected-->" in str(first_msg.content):
         return None
 
     try:
@@ -91,10 +95,12 @@ async def memory_inject(
             # 异步获取记忆上下文
             context = await mgr.get_context(session_id, current_query)
 
-            if context and state["messages"]:
-                # 将记忆注入到第一条 system 消息（带防重复标记）
-                if hasattr(first_msg, "content") and first_msg.type == "system":
-                    first_msg.content = context + "\n\n" + first_msg.content + "\n<!--memory_injected-->"
+            if context:
+                # 在消息列表头部插入 SystemMessage（含记忆上下文 + 防重复标记）
+                from langchain_core.messages import SystemMessage
+                system_msg = SystemMessage(content=context + "\n<!--memory_injected-->")
+                state["messages"].insert(0, system_msg)
+                logger.debug(f"[memory_inject] 已注入记忆上下文 session={session_id}, 长度={len(context)}")
     except Exception:
         pass  # 记忆注入失败不影响核心对话
 
@@ -125,33 +131,39 @@ async def token_guard(
     Token 窗口守卫：在每次模型调用前检查上下文 token 数，
     超出阈值时自动裁剪最早的历史消息，必要时生成摘要。
 
-    必须在 memory_inject 之后执行，此时 system prompt 已包含注入的记忆。
+    必须在 memory_inject 之后执行：memory_inject 将记忆上下文以 SystemMessage
+    形式插入消息列表头部，token_guard 在此基础上做窗口守卫。
     """
     session_id = runtime.context.get("session_id")
     if not session_id:
         return None
 
-    # 检查是否已经处理过（单次 ReAct 循环只裁一次）
+    # 检查是否已注入记忆（第一条是 SystemMessage 且带 memory_injected 标记）
     first_msg = state["messages"][0]
-    if not (hasattr(first_msg, "content") and first_msg.type == "system"):
-        return None
+    if not (hasattr(first_msg, "content") and hasattr(first_msg, "type") and first_msg.type == "system"):
+        return None  # memory_inject 未注入，无历史可守卫
     if "<!--token_guarded-->" in first_msg.content:
-        return None
+        return None  # 已守卫过
 
     try:
         from utils.token_counter import get_token_counter
+        from utils.prompt_loader import load_system_prompts
         counter = get_token_counter()
 
-        system_text = first_msg.content
-        other_messages = state["messages"][1:]  # system 之后的消息
+        # 原始系统提示词在模型配置中（create_agent 的 system_prompt 参数），
+        # 不在消息列表里。需合并计算才能得到真实的 token 总数。
+        original_system_prompt = load_system_prompts()
+        full_system_text = original_system_prompt + "\n" + first_msg.content
+        other_messages = state["messages"][1:]
 
         # 1. 检查是否超标
-        is_over, budget = counter.check(system_text, other_messages)
+        is_over, budget = counter.check(full_system_text, other_messages)
         if not is_over:
             logger.debug(
                 f"[token_guard] OK total={budget.total}/{budget.limit} "
                 f"session={session_id}"
             )
+            first_msg.content += "\n<!--token_guarded-->"
             return None
 
         logger.warning(
@@ -159,9 +171,12 @@ async def token_guard(
             f"session={session_id}, 开始截断..."
         )
 
-        # 2. 解析 system prompt：找出历史记录段
-        new_system = _trim_history(counter, system_text, budget.limit)
-        first_msg.content = new_system + "\n<!--token_guarded-->"
+        # 2. 裁剪记忆上下文中的历史记录段
+        #    预算上限需扣除原始系统提示词（它不会被裁剪）
+        original_tokens = counter.count(original_system_prompt)
+        memory_budget = max(budget.limit - original_tokens, budget.limit // 2)
+        new_memory = _trim_history(counter, first_msg.content, memory_budget)
+        first_msg.content = new_memory + "\n<!--token_guarded-->"
 
     except Exception:
         pass  # 守卫失败不影响核心对话

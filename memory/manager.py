@@ -153,8 +153,16 @@ class MemoryManager:
         logger.info(f"[Memory] 已清除会话 {session_id} 的全部记忆")
 
     async def _ensure_initialized(self):
+        """确保已初始化；若处于降级模式（Redis 之前不可用），尝试重新连接"""
         if not self._initialized:
             await self.initialize()
+        elif self.short_term is not None and self.short_term.redis is None:
+            # 之前因 Redis 不可用而进入降级模式，尝试重新初始化
+            self._initialized = False
+            try:
+                await self.initialize()
+            except Exception:
+                pass  # 重试失败，保持降级模式
 
     async def close(self):
         """关闭 Redis 连接"""
